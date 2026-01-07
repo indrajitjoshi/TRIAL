@@ -1,5 +1,5 @@
 streamlit
 python-docx
-transformers==4.38.2
-torch==2.2.1
+transformers
+torch
 sentencepiece
