@@ -3,6 +3,7 @@ import json
 import io
 import pandas as pd
 import time
+import os
 from datetime import datetime
 from docx import Document
 from docx.shared import Pt, Inches
@@ -13,8 +14,8 @@ import google.generativeai as genai
 st.set_page_config(page_title="GenAI SOW Agent", layout="wide", page_icon="📝")
 
 # Gemini API Initialization
-# The environment provides the key at runtime via this variable.
-apiKey = "" 
+# Using environment variable for security and configuration flexibility
+apiKey = os.environ.get("GENAI_API_KEY", "") 
 genai.configure(api_key=apiKey)
 
 # --- SESSION STATE INITIALIZATION ---
@@ -43,7 +44,7 @@ if 'sow_data' not in st.session_state:
 def generate_selected_content():
     """
     Generates content only for the sections selected by the user.
-    Uses Gemini 2.5 Flash with optimized timeout and simplified schema to avoid stalls.
+    Uses Gemini 2.5 Flash with extended timeout and robust error handling.
     """
     meta = st.session_state.sow_data["metadata"]
     solution = meta["other_solution"] if meta["solution_type"] == "Other (Please specify)" else meta["solution_type"]
@@ -90,25 +91,30 @@ def generate_selected_content():
 
     for attempt in range(max_retries):
         try:
-            # We use flash-preview-09-2025 as it is the most responsive for structured JSON
             model = genai.GenerativeModel(
                 model_name="gemini-2.5-flash-preview-09-2025",
                 system_instruction=system_prompt
             )
             
-            # Use non-streaming with a slightly shorter timeout per attempt to trigger retries faster
+            # Increased timeout to 120 seconds to handle complex generations and avoid 504 errors
             response = model.generate_content(
                 user_prompt,
                 generation_config=genai.types.GenerationConfig(
                     temperature=0.3,
                     response_mime_type="application/json",
                 ),
-                request_options={"timeout": 45} 
+                request_options={"timeout": 120} 
             )
             
             if response and response.candidates:
                 res_text = response.candidates[0].content.parts[0].text
-                generated_data = json.loads(res_text)
+                
+                # Robust parsing with fallback for non-JSON returns
+                try:
+                    generated_data = json.loads(res_text)
+                except json.JSONDecodeError:
+                    st.warning("Model returned non-JSON text; using raw content distribution.")
+                    generated_data = {section: res_text for section in selected}
                 
                 # Success: Map generated data back to session state
                 for section in selected:
