@@ -27,6 +27,7 @@ if 'sow_data' not in st.session_state:
             "selected_sections": [],
             "industry": "Financial Services",
             "customer_name": "Acme Corp",
+            "raw_objective_input": "", # Store the user's raw business problem input
         },
         "sections": {
             "2.1 OBJECTIVE": "",
@@ -49,6 +50,7 @@ def generate_selected_content():
     meta = st.session_state.sow_data["metadata"]
     solution = meta["other_solution"] if meta["solution_type"] == "Other (Please specify)" else meta["solution_type"]
     selected = meta["selected_sections"]
+    raw_input = meta["raw_objective_input"]
     
     if not selected:
         st.error("Please select at least one section to generate.")
@@ -56,31 +58,32 @@ def generate_selected_content():
 
     status_placeholder = st.empty()
     
+    # Prompt helper mapping
     prompt_map = {
-        "2.1 OBJECTIVE": "Write a 2-paragraph professional business objective for this solution.",
-        "2.2 PROJECT SPONSOR(S) / STAKEHOLDER(S) / PROJECT TEAM": "Describe the ideal project team structure including Sponsor, Tech Lead, and SME roles.",
+        "2.1 OBJECTIVE": f"Rewrite the following business problem into a formal Statement of Work Objective section: '{raw_input}'. Align it strictly to the '{solution}' solution type.",
+        "2.2 PROJECT SPONSOR(S) / STAKEHOLDER(S) / PROJECT TEAM": "Describe the ideal project team structure including Sponsor, Tech Lead, and SME roles for this project.",
         "2.3 ASSUMPTIONS & DEPENDENCIES": "List 5 technical assumptions and 3 customer dependencies (e.g. data access, API keys). Use bullets.",
         "2.4 PoC Success Criteria": "Define 4 measurable KPIs for this PoC (e.g. Accuracy, Latency, Adoption). Use bullets.",
-        "3 SCOPE OF WORK - TECHNICAL PROJECT PLAN": "Detail the technical work plan phases: Discovery, Infra, Development, and Testing.",
-        "4 SOLUTION ARCHITECTURE / ARCHITECTURAL DIAGRAM": "Describe the high-level AWS architecture components (Bedrock, Lambda, OpenSearch) required.",
-        "5 RESOURCES & COST ESTIMATES": "Provide a high-level estimate of resource roles needed and potential cloud consumption costs."
+        "3 SCOPE OF WORK - TECHNICAL PROJECT PLAN": "Detail the technical work plan phases: Discovery, Infrastructure Setup, Development, and Testing/UAT.",
+        "4 SOLUTION ARCHITECTURE / ARCHITECTURAL DIAGRAM": "Describe the high-level AWS architecture components (Bedrock, Lambda, OpenSearch) required for this solution.",
+        "5 RESOURCES & COST ESTIMATES": "Provide a high-level estimate of resource roles needed and potential cloud consumption costs/credits."
     }
 
     # Iterate through selected sections and generate content for each
-    # This is MUCH more reliable than one giant JSON request
     for i, section_key in enumerate(selected):
         status_placeholder.info(f"⏳ AI Agent drafting section ({i+1}/{len(selected)}): {section_key}...")
         
-        system_prompt = "You are a Senior AI Solutions Architect. Write professional, formal SOW content. Do not use conversational filler, greetings, or markdown headers."
+        system_prompt = "You are a Senior AI Solutions Architect. Write professional, formal, and authoritative SOW content. Do not use conversational filler, greetings, or markdown headers. Ensure the output is ready to be pasted directly into a legal document."
         
         user_prompt = f"""
-        Solution: {solution}
-        Industry: {meta['industry']}
+        Solution Type: {solution}
+        Industry/Domain: {meta['industry']}
+        Customer: {meta['customer_name']}
         Task: {prompt_map[section_key]}
         """
 
-        max_retries = 3
-        retry_delays = [1, 2, 4]
+        max_retries = 5
+        retry_delays = [1, 2, 4, 8, 16] # Exponential backoff for reliability
         success = False
 
         for attempt in range(max_retries):
@@ -94,9 +97,9 @@ def generate_selected_content():
                     user_prompt,
                     generation_config=genai.types.GenerationConfig(
                         temperature=0.3,
-                        max_output_tokens=1000,
+                        max_output_tokens=1500,
                     ),
-                    request_options={"timeout": 60} 
+                    request_options={"timeout": 90} # Higher timeout for robust generation
                 )
                 
                 if response and response.text:
@@ -104,14 +107,14 @@ def generate_selected_content():
                     success = True
                     break
                 else:
-                    raise Exception("Empty response")
+                    raise Exception("Empty response from model.")
             except Exception as e:
                 if attempt < max_retries - 1:
                     time.sleep(retry_delays[attempt])
                 else:
                     st.error(f"Failed to generate {section_key}: {str(e)}")
 
-    status_placeholder.success("✅ All selected sections drafted successfully!")
+    status_placeholder.success("✅ Drafting complete! Review your sections below.")
     time.sleep(1)
     status_placeholder.empty()
     return True
@@ -167,7 +170,17 @@ def main():
         st.session_state.sow_data["metadata"]["industry"] = st.selectbox("Industry", ["Financial Services", "Retail", "Healthcare", "Manufacturing", "Legal", "Public Sector"])
         
         st.divider()
-        st.write("### 2. Select Sections to Generate")
+        
+        # --- BUSINESS OBJECTIVE INPUT ---
+        st.write("### 2. Project Overview Inputs")
+        st.session_state.sow_data["metadata"]["raw_objective_input"] = st.text_area(
+            "What business problem is the customer solving?", 
+            placeholder="Example: Reduce manual effort, improve accuracy, enable faster decision-making, improve conversion, etc.",
+            help="This input will be refined by the LLM into the formal '2.1 OBJECTIVE' section."
+        )
+
+        st.divider()
+        st.write("### 3. Select Sections to Generate")
         section_list = [
             "2.1 OBJECTIVE", 
             "2.2 PROJECT SPONSOR(S) / STAKEHOLDER(S) / PROJECT TEAM", 
