@@ -19,6 +19,7 @@ os.environ["GRPC_DNS_RESOLVER"] = "native"
 
 # --- API INITIALIZATION ---
 # The environment provides the key at runtime. We use an empty string for the default configuration.
+# Note: In this environment, gemini-2.5-flash-preview-09-2025 is the primary supported model for generation.
 apiKey = "" 
 genai.configure(api_key=apiKey, transport='rest')
 
@@ -48,12 +49,12 @@ if 'sow_data' not in st.session_state:
 
 def call_genai_service(prompt):
     """
-    Stable call wrapper using Gemini 1.5 Pro with REST transport and aggressive retries.
+    Stable call wrapper using gemini-2.5-flash-preview-09-2025 with REST transport and aggressive retries.
     """
     try:
-        # Switched to gemini-1.5-pro for higher reasoning quality
+        # Reverting to the primary supported model for this environment for maximum stability
         model = genai.GenerativeModel(
-            model_name="gemini-1.5-pro",
+            model_name="gemini-2.5-flash-preview-09-2025",
             system_instruction="You are a professional SOW Architect. Write formal, technical, and concise document content. No greetings, no intros, no conversational filler."
         )
         
@@ -63,13 +64,14 @@ def call_genai_service(prompt):
         
         for attempt in range(max_retries):
             try:
+                # Use generateContent (non-streaming)
                 response = model.generate_content(
                     prompt,
                     generation_config=genai.types.GenerationConfig(
                         temperature=0.3,
-                        max_output_tokens=2048, # Increased for Pro model capacity
+                        max_output_tokens=2048,
                     ),
-                    request_options={"timeout": 180} # Increased timeout for Pro reasoning
+                    request_options={"timeout": 120}
                 )
                 
                 if response and response.text:
@@ -112,7 +114,7 @@ def generate_selected_content():
     }
 
     for i, section_key in enumerate(selected):
-        status_placeholder.info(f"⏳ AI Agent drafting {section_key} ({i+1}/{len(selected)}) using Gemini Pro...")
+        status_placeholder.info(f"⏳ AI Agent drafting {section_key} ({i+1}/{len(selected)})...")
         
         prompt = f"Context: {meta['industry']} industry.\nTask: {prompt_map[section_key]}"
         
@@ -209,7 +211,7 @@ def main():
                 st.rerun()
 
     st.title("📄 AI Statement of Work Architect")
-    st.markdown("Automate enterprise-grade SOW drafting with Gemini 1.5 Pro.")
+    st.markdown("Automate enterprise-grade SOW drafting.")
 
     tabs = st.tabs(["Project Overview", "Technical Plan", "Financials & Export"])
 
