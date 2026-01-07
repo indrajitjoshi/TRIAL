@@ -3,20 +3,20 @@ import json
 import io
 import time
 import os
-import requests
 from datetime import datetime
 from docx import Document
 from docx.shared import Pt, Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+import google.generativeai as genai
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="GenAI SOW Agent", layout="wide", page_icon="📝")
 
-# --- API BRIDGE CONFIGURATION ---
-# Using the standard environment endpoint for Gemini 2.5 Flash
-API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent"
+# --- API CONFIGURATION ---
 # The execution environment provides the key at runtime.
+# We use the official SDK but force REST transport for maximum stability in this environment.
 apiKey = "" 
+genai.configure(api_key=apiKey, transport='rest')
 
 # --- SESSION STATE INITIALIZATION ---
 if 'sow_data' not in st.session_state:
@@ -42,46 +42,40 @@ if 'sow_data' not in st.session_state:
 
 # --- LLM ENGINE ---
 
-def call_gemini_api(prompt):
+def call_gemini_stable(prompt):
     """
-    Direct HTTP call to the Gemini API to bypass SDK overhead and stabilize connections.
-    Implements mandatory exponential backoff.
+    Stable call wrapper using the official SDK with built-in retries and REST transport.
     """
-    headers = {'Content-Type': 'application/json'}
-    payload = {
-        "contents": [{
-            "parts": [{"text": prompt}]
-        }],
-        "generationConfig": {
-            "temperature": 0.3,
-            "maxOutputTokens": 1500
-        }
-    }
+    model = genai.GenerativeModel(
+        model_name="gemini-2.5-flash-preview-09-2025",
+        system_instruction="You are a professional SOW Architect. Write formal, technical, and concise document content. No greetings, no intros, no conversational filler."
+    )
     
     max_retries = 5
     retry_delays = [1, 2, 4, 8, 16]
     
     for attempt in range(max_retries):
         try:
-            response = requests.post(
-                f"{API_URL}?key={apiKey}",
-                headers=headers,
-                json=payload,
-                timeout=120 # Generous timeout for complex enterprise sections
+            response = model.generate_content(
+                prompt,
+                generation_config=genai.types.GenerationConfig(
+                    temperature=0.3,
+                    max_output_tokens=1500
+                ),
+                request_options={"timeout": 120}
             )
             
-            if response.status_code == 200:
-                result = response.json()
-                return result['candidates'][0]['content']['parts'][0]['text']
-            elif response.status_code in [429, 503, 504]:
-                time.sleep(retry_delays[attempt])
+            if response and response.text:
+                return response.text.strip()
             else:
-                return f"API Error (Status {response.status_code}): {response.text}"
+                raise Exception("Empty text returned from model.")
+                
         except Exception as e:
             if attempt == max_retries - 1:
-                return f"Connection Failed: {str(e)}"
+                return f"Error: {str(e)}"
             time.sleep(retry_delays[attempt])
-    return "The AI service is currently overloaded. Please try again in a few moments."
+            
+    return "Error: Maximum retries exceeded."
 
 def generate_selected_content():
     """
@@ -99,29 +93,28 @@ def generate_selected_content():
     status_placeholder = st.empty()
     
     prompt_map = {
-        "2.1 OBJECTIVE": f"Rewrite this business problem into a formal SOW Objective: '{raw_input}'. Solution context: {solution}. Professional tone.",
-        "2.2 PROJECT SPONSOR(S) / STAKEHOLDER(S) / PROJECT TEAM": f"Describe the project team structure and roles required for a {solution} implementation.",
-        "2.3 ASSUMPTIONS & DEPENDENCIES": f"List 5 specific technical assumptions and 3 critical customer dependencies for {solution}.",
-        "2.4 PoC Success Criteria": f"Define 4 measurable and realistic KPIs for a {solution} PoC.",
-        "3 SCOPE OF WORK - TECHNICAL PROJECT PLAN": f"Detail the technical implementation phases (Discovery, Design, Build, Test) for {solution}.",
+        "2.1 OBJECTIVE": f"Rewrite this business problem into a formal SOW Objective section for a {solution} project: '{raw_input}'.",
+        "2.2 PROJECT SPONSOR(S) / STAKEHOLDER(S) / PROJECT TEAM": f"Describe the project team structure and professional roles required for a {solution} implementation.",
+        "2.3 ASSUMPTIONS & DEPENDENCIES": f"List 5 specific technical assumptions and 3 critical customer dependencies for a {solution} deployment.",
+        "2.4 PoC Success Criteria": f"Define 4 measurable and realistic KPIs to validate the success of a {solution} PoC.",
+        "3 SCOPE OF WORK - TECHNICAL PROJECT PLAN": f"Detail the technical implementation phases (Discovery, Design, Development, and UAT) for {solution}.",
         "4 SOLUTION ARCHITECTURE / ARCHITECTURAL DIAGRAM": f"Describe the high-level AWS architecture components (e.g., Bedrock, Lambda, OpenSearch) for {solution}.",
-        "5 RESOURCES & COST ESTIMATES": f"Estimate resource roles (Data Engineer, ML Ops, etc.) and cloud cost factors for {solution}."
+        "5 RESOURCES & COST ESTIMATES": f"Estimate resource roles (e.g., Data Engineer, ML Ops) and cloud consumption cost drivers for {solution}."
     }
 
     for i, section_key in enumerate(selected):
-        status_placeholder.info(f"⏳ Section ({i+1}/{len(selected)}): {section_key} is being drafted...")
+        status_placeholder.info(f"⏳ Drafting {section_key} ({i+1}/{len(selected)})...")
         
-        system_instruction = "You are a professional SOW Architect. Write formal, concise, and technical document content. No greetings or intros."
-        prompt = f"System: {system_instruction}\n\nIndustry: {meta['industry']}\nSolution: {solution}\nTask: {prompt_map[section_key]}"
+        prompt = f"Industry: {meta['industry']}\nSolution: {solution}\nSection: {section_key}\nTask: {prompt_map[section_key]}"
         
-        generated_text = call_gemini_api(prompt)
+        generated_text = call_gemini_stable(prompt)
         
-        if "API Error" not in generated_text and "Connection Failed" not in generated_text:
-            st.session_state.sow_data["sections"][section_key] = generated_text.strip()
+        if "Error:" not in generated_text:
+            st.session_state.sow_data["sections"][section_key] = generated_text
         else:
-            st.error(f"❌ {generated_text}")
+            st.error(f"❌ Failed to draft {section_key}: {generated_text}")
 
-    status_placeholder.success("✅ Drafting complete! Review your sections below.")
+    status_placeholder.success("✅ SOW drafting complete!")
     time.sleep(1)
     status_placeholder.empty()
     return True
@@ -180,8 +173,8 @@ def main():
         st.write("### 2. Business Context")
         st.session_state.sow_data["metadata"]["raw_objective_input"] = st.text_area(
             "What problem are we solving?", 
-            placeholder="e.g. Automate manual document review to reduce turnaround time by 50%...",
-            help="AI will use this to generate the formal Objective section."
+            placeholder="e.g. Automate manual document review to reduce turnaround time...",
+            help="AI will transform this into the formal Objective section."
         )
 
         st.divider()
