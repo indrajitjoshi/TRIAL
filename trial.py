@@ -27,7 +27,7 @@ if 'sow_data' not in st.session_state:
             "selected_sections": [],
             "industry": "Financial Services",
             "customer_name": "Acme Corp",
-            "raw_objective_input": "", # Store the user's raw business problem input
+            "raw_objective_input": "", 
         },
         "sections": {
             "2.1 OBJECTIVE": "",
@@ -45,7 +45,7 @@ if 'sow_data' not in st.session_state:
 def generate_selected_content():
     """
     Generates content only for the sections selected by the user.
-    Uses an iterative approach (one call per section) for maximum reliability and speed.
+    Uses an iterative approach (one call per section) for maximum reliability.
     """
     meta = st.session_state.sow_data["metadata"]
     solution = meta["other_solution"] if meta["solution_type"] == "Other (Please specify)" else meta["solution_type"]
@@ -82,10 +82,9 @@ def generate_selected_content():
         Task: {prompt_map[section_key]}
         """
 
-        max_retries = 5
-        retry_delays = [1, 2, 4, 8, 16] # Exponential backoff for reliability
-        success = False
-
+        max_retries = 3
+        retry_delays = [2, 4, 8]
+        
         for attempt in range(max_retries):
             try:
                 model = genai.GenerativeModel(
@@ -99,12 +98,11 @@ def generate_selected_content():
                         temperature=0.3,
                         max_output_tokens=1500,
                     ),
-                    request_options={"timeout": 90} # Higher timeout for robust generation
+                    request_options={"timeout": 60} 
                 )
                 
                 if response and response.text:
                     st.session_state.sow_data["sections"][section_key] = response.text.strip()
-                    success = True
                     break
                 else:
                     raise Exception("Empty response from model.")
@@ -204,22 +202,23 @@ def main():
     st.title("📄 GenAI SOW Architect")
     st.markdown("Automate professional enterprise SOW creation with AI agents.")
 
-    tabs = st.tabs(["Project Foundations", "Technical & Architecture", "Resource & Export"])
+    # Simplified Tab Names
+    tabs = st.tabs(["Project Overview", "Technical Execution", "Financials"])
 
     with tabs[0]:
-        st.subheader("Heading 2: Project Overview")
+        st.subheader("Project Overview")
         st.session_state.sow_data["sections"]["2.1 OBJECTIVE"] = st.text_area("2.1 OBJECTIVE", value=st.session_state.sow_data["sections"]["2.1 OBJECTIVE"], height=200, key="area_21")
         st.session_state.sow_data["sections"]["2.2 PROJECT SPONSOR(S) / STAKEHOLDER(S) / PROJECT TEAM"] = st.text_area("2.2 STAKEHOLDERS", value=st.session_state.sow_data["sections"]["2.2 PROJECT SPONSOR(S) / STAKEHOLDER(S) / PROJECT TEAM"], height=200, key="area_22")
         st.session_state.sow_data["sections"]["2.3 ASSUMPTIONS & DEPENDENCIES"] = st.text_area("2.3 ASSUMPTIONS", value=st.session_state.sow_data["sections"]["2.3 ASSUMPTIONS & DEPENDENCIES"], height=200, key="area_23")
         st.session_state.sow_data["sections"]["2.4 PoC Success Criteria"] = st.text_area("2.4 SUCCESS CRITERIA", value=st.session_state.sow_data["sections"]["2.4 PoC Success Criteria"], height=200, key="area_24")
 
     with tabs[1]:
-        st.subheader("Heading 3 & 4: Technical Execution")
+        st.subheader("Technical Execution")
         st.session_state.sow_data["sections"]["3 SCOPE OF WORK - TECHNICAL PROJECT PLAN"] = st.text_area("3 SCOPE OF WORK", value=st.session_state.sow_data["sections"]["3 SCOPE OF WORK - TECHNICAL PROJECT PLAN"], height=300, key="area_3")
         st.session_state.sow_data["sections"]["4 SOLUTION ARCHITECTURE / ARCHITECTURAL DIAGRAM"] = st.text_area("4 SOLUTION ARCHITECTURE", value=st.session_state.sow_data["sections"]["4 SOLUTION ARCHITECTURE / ARCHITECTURAL DIAGRAM"], height=250, key="area_4")
 
     with tabs[2]:
-        st.subheader("Heading 5: Financials")
+        st.subheader("Financials")
         st.session_state.sow_data["sections"]["5 RESOURCES & COST ESTIMATES"] = st.text_area("5 RESOURCES & COSTS", value=st.session_state.sow_data["sections"]["5 RESOURCES & COST ESTIMATES"], height=250, key="area_5")
 
         st.divider()
