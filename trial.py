@@ -13,8 +13,13 @@ import google.generativeai as genai
 # --- CONFIGURATION ---
 st.set_page_config(page_title="GenAI SOW Agent", layout="wide", page_icon="📝")
 
+# --- FIX FOR METADATA SERVICE TIMEOUT ---
+# Disabling the Google Cloud Auth plugin's metadata service lookup to prevent 503/Timeout errors
+os.environ["GOOGLE_API_USE_CLIENT_CERTIFICATE"] = "false"
+os.environ["GRPC_DNS_RESOLVER"] = "native"
+
 # Gemini API Initialization
-# The execution environment provides the key at runtime. 
+# The execution environment provides the key at runtime.
 apiKey = "" 
 genai.configure(api_key=apiKey)
 
@@ -92,13 +97,14 @@ def generate_selected_content():
                     system_instruction=system_prompt
                 )
                 
+                # Increased timeout to 90 seconds to ensure the model has enough time to respond
                 response = model.generate_content(
                     user_prompt,
                     generation_config=genai.types.GenerationConfig(
                         temperature=0.3,
                         max_output_tokens=1500,
                     ),
-                    request_options={"timeout": 60} 
+                    request_options={"timeout": 90} 
                 )
                 
                 if response and response.text:
