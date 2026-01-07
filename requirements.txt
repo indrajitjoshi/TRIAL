@@ -1,7 +1,5 @@
 streamlit
-boto3
-google-generativeai
+transformers
+torch
+accelerate
 python-docx
-pandas
-fpdf
-python-dotenv
