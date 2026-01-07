@@ -13,8 +13,9 @@ import google.generativeai as genai
 # --- CONFIGURATION ---
 st.set_page_config(page_title="GenAI SOW Agent", layout="wide", page_icon="📝")
 
-# --- FIX FOR METADATA SERVICE TIMEOUT ---
-# Disabling the Google Cloud Auth plugin's metadata service lookup to prevent 503/Timeout errors
+# --- FIX FOR METADATA SERVICE TIMEOUT & 504 ERRORS ---
+# Disabling the Google Cloud Auth plugin's metadata service lookup to prevent 503/504 errors
+# and forcing the use of native DNS to stabilize the gRPC connection
 os.environ["GOOGLE_API_USE_CLIENT_CERTIFICATE"] = "false"
 os.environ["GRPC_DNS_RESOLVER"] = "native"
 
@@ -87,24 +88,26 @@ def generate_selected_content():
         Task: {prompt_map[section_key]}
         """
 
-        max_retries = 3
-        retry_delays = [2, 4, 8]
+        # Increased retries and backoff for better resilience against 504/503 errors
+        max_retries = 5
+        retry_delays = [2, 4, 8, 16, 32]
         
         for attempt in range(max_retries):
             try:
+                # Re-initializing the model inside the loop ensures fresh configuration per request
                 model = genai.GenerativeModel(
                     model_name="gemini-2.5-flash-preview-09-2025",
                     system_instruction=system_prompt
                 )
                 
-                # Increased timeout to 90 seconds to ensure the model has enough time to respond
+                # Increased timeout significantly to handle environment latency
                 response = model.generate_content(
                     user_prompt,
                     generation_config=genai.types.GenerationConfig(
                         temperature=0.3,
                         max_output_tokens=1500,
                     ),
-                    request_options={"timeout": 90} 
+                    request_options={"timeout": 120} 
                 )
                 
                 if response and response.text:
@@ -114,6 +117,7 @@ def generate_selected_content():
                     raise Exception("Empty response from model.")
             except Exception as e:
                 if attempt < max_retries - 1:
+                    status_placeholder.warning(f"Re-attempting {section_key} (Attempt {attempt+2}/{max_retries})...")
                     time.sleep(retry_delays[attempt])
                 else:
                     st.error(f"Failed to generate {section_key}: {str(e)}")
