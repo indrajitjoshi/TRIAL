@@ -34,21 +34,20 @@ pipe = load_llm()
 if "sow_data" not in st.session_state:
     st.session_state.sow_data = {
         "metadata": {
-            "solution_type": "Multi Agent Store Advisor",
-            "other_solution": "",
-            "selected_sections": [],
-            "industry": "Financial Services",
-            "customer_name": "Acme Corp",
-            "raw_objective_input": ""
+            "solution_name": "WIMO Bot",
+            "industry": "Retail / QSR",
+            "customer_name": "Customer Name",
+            "partner_name": "Partner Name",
+            "raw_objective": ""
         },
         "sections": {
             "2.1 OBJECTIVE": "",
             "2.2 PROJECT SPONSOR(S) / STAKEHOLDER(S) / PROJECT TEAM": "",
             "2.3 ASSUMPTIONS & DEPENDENCIES": "",
-            "2.4 PoC Success Criteria": "",
+            "2.4 PROJECT SUCCESS CRITERIA": "",
             "3 SCOPE OF WORK - TECHNICAL PROJECT PLAN": "",
             "4 SOLUTION ARCHITECTURE / ARCHITECTURAL DIAGRAM": "",
-            "5 RESOURCES & COST ESTIMATES": ""
+            "6 RESOURCES & COST ESTIMATES": ""
         }
     }
 
@@ -59,146 +58,176 @@ def call_llm(prompt: str) -> str:
     try:
         result = pipe(
             prompt,
-            max_new_tokens=400,
-            temperature=0.3
+            max_new_tokens=500,
+            temperature=0.2
         )
         return result[0]["generated_text"].strip()
     except Exception as e:
         return f"Error: {str(e)}"
 
 # -------------------------------------------------
-# CONTENT GENERATION
+# GENERATION ENGINE (STRICT SOW FORMAT)
 # -------------------------------------------------
-def generate_selected_content():
+def generate_sow():
     meta = st.session_state.sow_data["metadata"]
-    solution = meta["other_solution"] if meta["solution_type"] == "Other (Please specify)" else meta["solution_type"]
-    selected = meta["selected_sections"]
-
-    if not selected:
-        st.error("Please select at least one section.")
-        return False
-
-    prompt_map = {
-        "2.1 OBJECTIVE":
-            f"Rewrite the following business problem into a formal SOW Objective section for a {solution} project:\n{meta['raw_objective_input']}",
-
-        "2.2 PROJECT SPONSOR(S) / STAKEHOLDER(S) / PROJECT TEAM":
-            f"Describe project sponsors, stakeholders, governance, and delivery team roles for a {solution} implementation.",
-
-        "2.3 ASSUMPTIONS & DEPENDENCIES":
-            f"List 5 technical assumptions and 3 customer dependencies for implementing {solution}.",
-
-        "2.4 PoC Success Criteria":
-            f"Define 4 measurable KPIs to evaluate the success of a {solution} Proof of Concept.",
-
-        "3 SCOPE OF WORK - TECHNICAL PROJECT PLAN":
-            f"Describe the Discovery, Design, Development, Testing, and UAT phases for delivering {solution}.",
-
-        "4 SOLUTION ARCHITECTURE / ARCHITECTURAL DIAGRAM":
-            f"Describe a high-level cloud-based solution architecture for {solution}, including data flow, security, and AI components.",
-
-        "5 RESOURCES & COST ESTIMATES":
-            f"Estimate delivery roles, effort assumptions, and primary cost drivers for a {solution} project."
-    }
+    sec = st.session_state.sow_data["sections"]
 
     status = st.empty()
+    status.info("⏳ Generating enterprise-grade SOW...")
 
-    for i, section in enumerate(selected):
-        status.info(f"⏳ Generating {section} ({i+1}/{len(selected)})")
-        prompt = f"Industry: {meta['industry']}\n\nTask:\n{prompt_map[section]}"
-        content = call_llm(prompt)
+    # 2.1 OBJECTIVE
+    sec["2.1 OBJECTIVE"] = call_llm(f"""
+Write ONLY the Objective section in a formal SOW tone.
 
-        if not content.startswith("Error"):
-            st.session_state.sow_data["sections"][section] = content
-        else:
-            st.error(content)
+Context:
+- Solution: {meta['solution_name']}
+- Industry: {meta['industry']}
+- Business Problem: {meta['raw_objective']}
 
-    status.success("✅ SOW generation completed")
+Constraints:
+- 2–3 sentences
+- Consulting-style language
+- No headings, no bullets
+""")
+
+    # 2.2 STAKEHOLDERS
+    sec["2.2 PROJECT SPONSOR(S) / STAKEHOLDER(S) / PROJECT TEAM"] = call_llm(f"""
+Create a structured stakeholder section for a POC SOW.
+
+Include:
+- Partner Executive Sponsor
+- Customer Executive Sponsor
+- Cloud / Technology Sponsor
+- Project Escalation Contacts
+
+Use table-like bullet formatting with:
+Name | Title | Responsibility
+""")
+
+    # 2.3 ASSUMPTIONS & DEPENDENCIES
+    sec["2.3 ASSUMPTIONS & DEPENDENCIES"] = call_llm(f"""
+Write this section exactly in the following structure:
+
+Dependencies:
+- List 2–3 customer dependencies required before POC start
+
+Assumptions:
+- List 2–3 delivery assumptions by the implementation partner
+
+Tone: Formal, contractual, POC-specific
+""")
+
+    # 2.4 SUCCESS CRITERIA
+    sec["2.4 PROJECT SUCCESS CRITERIA"] = call_llm(f"""
+Create Project Success Criteria in this exact format:
+
+1. Demonstrations:
+- Bullet points of demo capabilities
+
+2. Results:
+- Bullet points of expected technical outcomes
+
+Context: {meta['solution_name']} GenAI POC
+""")
+
+    # 3 SCOPE OF WORK
+    sec["3 SCOPE OF WORK - TECHNICAL PROJECT PLAN"] = call_llm(f"""
+Write Scope of Work using this structure:
+
+1. Requirements Gathering & Design (Estimated Time: 1 week)
+- Bulleted activities
+
+2. Model / Bot Development (Estimated Time: 1 week)
+- Bulleted activities
+
+3. Integration & UI (Estimated Time: 1 week)
+- Bulleted activities
+
+4. Delivery & Demonstration (Estimated Time: 1 week)
+- Bulleted activities
+
+Tone: Consulting SOW
+""")
+
+    # 4 ARCHITECTURE
+    sec["4 SOLUTION ARCHITECTURE / ARCHITECTURAL DIAGRAM"] = call_llm(f"""
+Describe high-level solution architecture for a GenAI POC.
+
+Include:
+- UI layer
+- API / orchestration layer
+- LLM / embeddings
+- Data sources
+- Security considerations
+
+Do NOT include diagrams, only text.
+""")
+
+    # 6 COMMERCIALS
+    sec["6 RESOURCES & COST ESTIMATES"] = call_llm(f"""
+Write a short commercial section stating:
+
+- POC is a one-time investment
+- Jointly funded or exploratory in nature
+- Costs indicative and subject to post-POC decisions
+
+Tone: Enterprise SOW
+""")
+
+    status.success("✅ SOW Generated Successfully")
     time.sleep(1)
     status.empty()
-    return True
 
 # -------------------------------------------------
 # DOCX EXPORT
 # -------------------------------------------------
 def create_docx(data):
     doc = Document()
-    title = doc.add_heading("Statement of Work (SOW)", 0)
+    title = doc.add_heading("Scope of Work (SOW)", 0)
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
-    sol = data["metadata"]["other_solution"] if data["metadata"]["solution_type"] == "Other (Please specify)" else data["metadata"]["solution_type"]
 
     p = doc.add_paragraph()
     p.add_run(f"Customer: {data['metadata']['customer_name']}\n").bold = True
-    p.add_run(f"Solution: {sol}\n")
-    p.add_run(f"Date: {datetime.now().strftime('%Y-%m-%d')}")
+    p.add_run(f"Solution: {data['metadata']['solution_name']}\n")
+    p.add_run(f"Date: {datetime.now().strftime('%d %B %Y')}")
 
     for section, content in data["sections"].items():
-        if content:
-            doc.add_heading(section, level=1)
-            doc.add_paragraph(content)
+        doc.add_heading(section, level=1)
+        doc.add_paragraph(content)
 
-    buffer = io.BytesIO()
-    doc.save(buffer)
-    buffer.seek(0)
-    return buffer
+    buf = io.BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return buf
 
 # -------------------------------------------------
 # UI
 # -------------------------------------------------
 def main():
-    st.sidebar.title("🛠️ SOW Designer")
+    st.sidebar.title("🛠️ SOW Inputs")
 
     meta = st.session_state.sow_data["metadata"]
 
-    with st.sidebar:
-        meta["customer_name"] = st.text_input("Customer Name", meta["customer_name"])
+    meta["customer_name"] = st.sidebar.text_input("Customer Name", meta["customer_name"])
+    meta["solution_name"] = st.sidebar.text_input("Solution Name", meta["solution_name"])
+    meta["industry"] = st.sidebar.text_input("Industry", meta["industry"])
 
-        solution_options = [
-            "Multi Agent Store Advisor",
-            "Intelligent Search",
-            "Recommendation",
-            "Sales Co-Pilot",
-            "Virtual Data Analyst (Text to SQL)",
-            "Document / Report Audit",
-            "SOP Creation",
-            "Other (Please specify)"
-        ]
+    meta["raw_objective"] = st.sidebar.text_area(
+        "Business Objective",
+        placeholder="Describe the business problem the POC is solving..."
+    )
 
-        meta["solution_type"] = st.selectbox("Solution Type", solution_options)
+    if st.sidebar.button("🪄 Generate SOW", use_container_width=True):
+        generate_sow()
+        st.rerun()
 
-        if meta["solution_type"] == "Other (Please specify)":
-            meta["other_solution"] = st.text_input("Specify Solution Name")
-
-        meta["industry"] = st.selectbox(
-            "Industry",
-            ["Retail", "Financial Services", "Healthcare", "Manufacturing", "Legal"]
-        )
-
-        meta["raw_objective_input"] = st.text_area(
-            "Business Problem",
-            placeholder="Describe the problem this solution will address..."
-        )
-
-        st.divider()
-        st.write("### SOW Sections")
-
-        meta["selected_sections"] = []
-        for section in st.session_state.sow_data["sections"].keys():
-            if st.checkbox(section, value=True):
-                meta["selected_sections"].append(section)
-
-        if st.button("🪄 Auto-Generate SOW", use_container_width=True):
-            if generate_selected_content():
-                st.rerun()
-
-    st.title("📄 AI Statement of Work Architect")
+    st.title("📄 Generated Statement of Work")
 
     for section in st.session_state.sow_data["sections"]:
-        st.session_state.sow_data["sections"][section] = st.text_area(
+        st.text_area(
             section,
             st.session_state.sow_data["sections"][section],
-            height=200
+            height=220
         )
 
     st.divider()
@@ -207,13 +236,10 @@ def main():
     st.download_button(
         "📥 Download SOW (DOCX)",
         docx,
-        file_name=f"SOW_{meta['customer_name'].replace(' ', '_')}.docx",
+        file_name="Generated_SOW.docx",
         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         use_container_width=True
     )
 
-# -------------------------------------------------
-# ENTRY POINT
-# -------------------------------------------------
 if __name__ == "__main__":
     main()
