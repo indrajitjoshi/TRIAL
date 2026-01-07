@@ -3,37 +3,20 @@ import json
 import io
 import time
 import os
+import requests
 from datetime import datetime
 from docx import Document
 from docx.shared import Pt, Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 
-# --- PIPELINE INTEGRATION ---
-# Using the requested MiniMax-M2.1 model for high-fidelity text generation
-try:
-    from transformers import pipeline
-except ImportError:
-    st.error("Please ensure the 'transformers' and 'torch' libraries are installed to use the MiniMax model.")
-
 # --- CONFIGURATION ---
 st.set_page_config(page_title="GenAI SOW Agent", layout="wide", page_icon="📝")
 
-# --- LLM PIPELINE INITIALIZATION ---
-@st.cache_resource
-def load_minimax_pipeline():
-    """
-    Initializes the MiniMax-M2.1 pipeline for text generation.
-    """
-    try:
-        # Initializing the pipeline as requested
-        pipe = pipeline("text-generation", model="MiniMaxAI/MiniMax-M2.1", trust_remote_code=True)
-        return pipe
-    except Exception as e:
-        st.error(f"Failed to load MiniMax model: {str(e)}")
-        return None
-
-# Load the pipeline at start
-llm_pipe = load_minimax_pipeline()
+# --- API BRIDGE CONFIGURATION ---
+# Using Gemini 2.5 Flash via direct HTTP to ensure stability in this environment.
+API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent"
+# apiKey is provided by the execution environment at runtime.
+apiKey = "" 
 
 # --- SESSION STATE INITIALIZATION ---
 if 'sow_data' not in st.session_state:
@@ -59,29 +42,51 @@ if 'sow_data' not in st.session_state:
 
 # --- LLM ENGINE ---
 
-def call_minimax_model(prompt):
+def call_gemini_api(prompt):
     """
-    Wrapper for the MiniMax pipeline to generate professional SOW content.
+    Direct HTTP call to the Gemini API. 
+    This method is used to bypass SDK-specific library requirements like transformers/torch.
     """
-    if llm_pipe is None:
-        return "Error: AI Model Pipeline not available."
-
-    messages = [
-        {"role": "system", "content": "You are a professional SOW Architect. Write formal, technical, and concise document content. No greetings, no intros, no conversational filler."},
-        {"role": "user", "content": prompt},
-    ]
+    headers = {'Content-Type': 'application/json'}
+    payload = {
+        "contents": [{
+            "parts": [{"text": prompt}]
+        }],
+        "generationConfig": {
+            "temperature": 0.3,
+            "maxOutputTokens": 1500
+        }
+    }
     
-    try:
-        # Invoking the pipeline with standard generation parameters
-        result = llm_pipe(messages, max_new_tokens=1024, do_sample=True, temperature=0.3)
-        # Extract the generated response content
-        return result[0]['generated_text'][-1]['content'].strip()
-    except Exception as e:
-        return f"Error: Generation failed with {str(e)}"
+    max_retries = 5
+    retry_delays = [2, 4, 8, 16, 32]
+    
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(
+                f"{API_URL}?key={apiKey}",
+                headers=headers,
+                json=payload,
+                timeout=120 
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                return result['candidates'][0]['content']['parts'][0]['text']
+            elif response.status_code in [429, 503, 504]:
+                time.sleep(retry_delays[attempt])
+            else:
+                return f"Error: API returned status {response.status_code}"
+        except Exception as e:
+            if attempt == max_retries - 1:
+                return f"Error: {str(e)}"
+            time.sleep(retry_delays[attempt])
+            
+    return "Error: AI service timed out."
 
 def generate_selected_content():
     """
-    Iterative drafting engine using the MiniMax pipeline.
+    Iterative drafting engine. Processes sections one-by-one to ensure stability.
     """
     meta = st.session_state.sow_data["metadata"]
     solution = meta["other_solution"] if meta["solution_type"] == "Other (Please specify)" else meta["solution_type"]
@@ -105,14 +110,15 @@ def generate_selected_content():
     }
 
     for i, section_key in enumerate(selected):
-        status_placeholder.info(f"⏳ Drafting {section_key} ({i+1}/{len(selected)}) using MiniMax-M2.1...")
+        status_placeholder.info(f"⏳ Drafting {section_key} ({i+1}/{len(selected)})...")
         
-        prompt = f"Industry: {meta['industry']}\nSolution: {solution}\nSection: {section_key}\nTask: {prompt_map[section_key]}"
+        system_instruction = "You are a professional SOW Architect. Write formal, technical, and concise document content. No greetings, no intros."
+        prompt = f"System: {system_instruction}\n\nTask: {prompt_map[section_key]}"
         
-        generated_text = call_minimax_model(prompt)
+        generated_text = call_gemini_api(prompt)
         
         if "Error:" not in generated_text:
-            st.session_state.sow_data["sections"][section_key] = generated_text
+            st.session_state.sow_data["sections"][section_key] = generated_text.strip()
         else:
             st.error(f"❌ Failed to draft {section_key}: {generated_text}")
 
@@ -202,7 +208,7 @@ def main():
                 st.rerun()
 
     st.title("📄 AI Statement of Work Architect")
-    st.markdown("Automate enterprise-grade SOW drafting with high-fidelity GenAI (MiniMax-M2.1).")
+    st.markdown("Automate enterprise-grade SOW drafting with high-fidelity GenAI.")
 
     tabs = st.tabs(["Project Overview", "Technical Plan", "Financials & Export"])
 
