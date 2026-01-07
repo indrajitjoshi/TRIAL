@@ -1,27 +1,21 @@
 import streamlit as st
 import json
 import io
-import pandas as pd
 import time
-import os
+import requests
 from datetime import datetime
 from docx import Document
-from docx.shared import Pt, Inches
+from docx.shared import Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-import google.generativeai as genai
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="GenAI SOW Agent", layout="wide", page_icon="📝")
 
-# --- STABILITY FIXES FOR WEB ENVIRONMENTS ---
-# Force REST transport instead of gRPC to prevent connection hangs in browser-based environments
-os.environ["GOOGLE_API_USE_CLIENT_CERTIFICATE"] = "false"
-os.environ["GRPC_DNS_RESOLVER"] = "native"
-
-# Gemini API Initialization
-# We prioritize the environment-provided key for the Canvas runner
-apiKey = os.environ.get("GENAI_API_KEY", "") 
-genai.configure(api_key=apiKey, transport='rest')
+# --- DIRECT API BRIDGE CONFIGURATION ---
+# We use direct HTTP requests to bypass SDK initialization overhead and gRPC hangs.
+API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent"
+# apiKey is provided by the execution environment at runtime.
+apiKey = "" 
 
 # --- SESSION STATE INITIALIZATION ---
 if 'sow_data' not in st.session_state:
@@ -45,12 +39,55 @@ if 'sow_data' not in st.session_state:
         }
     }
 
-# --- LLM UTILS ---
+# --- LLM DIRECT CALL ENGINE ---
+
+def call_gemini_direct(system_instruction, user_prompt):
+    """
+    Direct HTTP bridge to Gemini API. 
+    Bypasses SDK metadata lookups and stabilizing connectivity.
+    """
+    headers = {'Content-Type': 'application/json'}
+    payload = {
+        "contents": [{
+            "parts": [{"text": f"System: {system_instruction}\n\nUser: {user_prompt}"}]
+        }],
+        "generationConfig": {
+            "temperature": 0.3,
+            "maxOutputTokens": 1500,
+            "topP": 0.8,
+            "topK": 40
+        }
+    }
+    
+    # Exponential Backoff Implementation
+    max_retries = 5
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(
+                f"{API_URL}?key={apiKey}",
+                headers=headers,
+                json=payload,
+                timeout=90
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                return result['candidates'][0]['content']['parts'][0]['text']
+            elif response.status_code == 429:
+                time.sleep(2 ** attempt)
+            elif response.status_code == 504 or response.status_code == 503:
+                time.sleep(2 ** attempt)
+            else:
+                return f"Error: Received status {response.status_code} from API."
+        except Exception as e:
+            if attempt == max_retries - 1:
+                return f"Connection Error: {str(e)}"
+            time.sleep(2 ** attempt)
+    return "API Timeout after multiple retries."
 
 def generate_selected_content():
     """
-    Generates content only for the sections selected by the user.
-    Uses an iterative approach with REST transport for maximum reliability.
+    Iterative drafting engine. Processes sections one-by-one for stability.
     """
     meta = st.session_state.sow_data["metadata"]
     solution = meta["other_solution"] if meta["solution_type"] == "Other (Please specify)" else meta["solution_type"]
@@ -64,59 +101,29 @@ def generate_selected_content():
     status_placeholder = st.empty()
     
     prompt_map = {
-        "2.1 OBJECTIVE": f"Rewrite this business problem into a formal SOW Objective: '{raw_input}'. Focus on {solution}.",
-        "2.2 PROJECT SPONSOR(S) / STAKEHOLDER(S) / PROJECT TEAM": f"Describe the project team roles for a {solution} implementation.",
-        "2.3 ASSUMPTIONS & DEPENDENCIES": f"List 5 technical assumptions and 3 dependencies for {solution}.",
-        "2.4 PoC Success Criteria": f"Define 4 measurable KPIs for a {solution} PoC.",
-        "3 SCOPE OF WORK - TECHNICAL PROJECT PLAN": f"Detail the implementation phases for {solution}.",
-        "4 SOLUTION ARCHITECTURE / ARCHITECTURAL DIAGRAM": f"Describe the AWS architecture components for {solution}.",
-        "5 RESOURCES & COST ESTIMATES": f"Estimate resource roles and cloud costs for {solution}."
+        "2.1 OBJECTIVE": f"Rewrite this business problem into a formal SOW Objective: '{raw_input}'. Solution context: {solution}.",
+        "2.2 PROJECT SPONSOR(S) / STAKEHOLDER(S) / PROJECT TEAM": f"Describe the project team structure and roles required for a {solution} implementation.",
+        "2.3 ASSUMPTIONS & DEPENDENCIES": f"List 5 specific technical assumptions and 3 critical customer dependencies for {solution}.",
+        "2.4 PoC Success Criteria": f"Define 4 measurable and realistic KPIs for a {solution} PoC.",
+        "3 SCOPE OF WORK - TECHNICAL PROJECT PLAN": f"Detail the technical implementation phases (Discovery, Design, Build, Test) for {solution}.",
+        "4 SOLUTION ARCHITECTURE / ARCHITECTURAL DIAGRAM": f"Describe the high-level AWS architecture components (e.g., Bedrock, Lambda, OpenSearch) for {solution}.",
+        "5 RESOURCES & COST ESTIMATES": f"Estimate resource roles (Data Engineer, ML Ops, etc.) and cloud cost factors for {solution}."
     }
 
     for i, section_key in enumerate(selected):
-        status_placeholder.info(f"⏳ AI Agent drafting section ({i+1}/{len(selected)}): {section_key}...")
+        status_placeholder.info(f"⏳ Section ({i+1}/{len(selected)}): {section_key} is being drafted...")
         
-        system_prompt = "You are a professional SOW Architect. Write formal, concise, and technical content. No intros/outros."
+        system_msg = "You are a professional SOW Architect. Write formal, concise, and technical document content. No greetings."
+        user_msg = f"Industry: {meta['industry']}\nSolution: {solution}\nTask: {prompt_map[section_key]}"
         
-        user_prompt = f"""
-        Solution: {solution}
-        Industry: {meta['industry']}
-        Task: {prompt_map[section_key]}
-        """
+        result = call_gemini_direct(system_msg, user_msg)
+        
+        if "Error" not in result:
+            st.session_state.sow_data["sections"][section_key] = result.strip()
+        else:
+            st.error(f"Failed to draft {section_key}. {result}")
 
-        max_retries = 3
-        retry_delays = [2, 5, 10]
-        
-        for attempt in range(max_retries):
-            try:
-                # Use a specific model version and ensure REST is enabled
-                model = genai.GenerativeModel(
-                    model_name="gemini-2.5-flash-preview-09-2025"
-                )
-                
-                # Higher timeout and direct text generation (no JSON mode for higher reliability)
-                response = model.generate_content(
-                    f"System: {system_prompt}\n\nUser: {user_prompt}",
-                    generation_config=genai.types.GenerationConfig(
-                        temperature=0.2,
-                        max_output_tokens=1024,
-                    ),
-                    request_options={"timeout": 120} 
-                )
-                
-                if response and hasattr(response, 'text') and response.text:
-                    st.session_state.sow_data["sections"][section_key] = response.text.strip()
-                    break
-                else:
-                    raise Exception("Incomplete model output.")
-            except Exception as e:
-                if attempt < max_retries - 1:
-                    status_placeholder.warning(f"Retrying {section_key} (Attempt {attempt+2}/{max_retries})...")
-                    time.sleep(retry_delays[attempt])
-                else:
-                    st.error(f"Failed {section_key}: AI service is busy. Please try again.")
-
-    status_placeholder.success("✅ Content ready! Review your sections below.")
+    status_placeholder.success("✅ Drafting complete! Please review below.")
     time.sleep(1)
     status_placeholder.empty()
     return True
@@ -147,7 +154,7 @@ def create_docx(data):
 # --- MAIN UI ---
 
 def main():
-    st.sidebar.title("🛠️ SOW Configuration")
+    st.sidebar.title("🛠️ SOW Designer")
     
     with st.sidebar:
         st.session_state.sow_data["metadata"]["customer_name"] = st.text_input("Customer Name", value=st.session_state.sow_data["metadata"]["customer_name"])
@@ -167,20 +174,20 @@ def main():
         st.session_state.sow_data["metadata"]["solution_type"] = st.selectbox("1. Select Solution Type", solution_options)
         
         if st.session_state.sow_data["metadata"]["solution_type"] == "Other (Please specify)":
-            st.session_state.sow_data["metadata"]["other_solution"] = st.text_input("Please specify solution name")
+            st.session_state.sow_data["metadata"]["other_solution"] = st.text_input("Specify Solution Name")
 
-        st.session_state.sow_data["metadata"]["industry"] = st.selectbox("Industry", ["Financial Services", "Retail", "Healthcare", "Manufacturing", "Legal", "Public Sector"])
+        st.session_state.sow_data["metadata"]["industry"] = st.selectbox("Industry", ["Retail", "Financial Services", "Healthcare", "Manufacturing", "Legal"])
         
         st.divider()
-        st.write("### 2. Project Overview Inputs")
+        st.write("### 2. Business Context")
         st.session_state.sow_data["metadata"]["raw_objective_input"] = st.text_area(
-            "What business problem is the customer solving?", 
-            placeholder="e.g., Reduce manual effort, improve accuracy...",
-            help="This will be refined into formal SOW text."
+            "What problem are we solving?", 
+            placeholder="e.g. Automate manual document review to reduce turnaround time by 50%...",
+            help="AI will use this to generate the formal Objective section."
         )
 
         st.divider()
-        st.write("### 3. Select Sections to Generate")
+        st.write("### 3. SOW Structure")
         section_list = [
             "2.1 OBJECTIVE", 
             "2.2 PROJECT SPONSOR(S) / STAKEHOLDER(S) / PROJECT TEAM", 
@@ -197,36 +204,32 @@ def main():
                 st.session_state.sow_data["metadata"]["selected_sections"].append(section)
 
         st.divider()
-        if st.button("🪄 Auto-Draft Selected Sections", type="primary", use_container_width=True):
+        if st.button("🪄 Auto-Generate SOW", type="primary", use_container_width=True):
             if generate_selected_content():
                 st.rerun()
 
-    st.title("📄 GenAI SOW Architect")
-    st.markdown("Automate professional enterprise SOW creation with AI agents.")
+    st.title("📄 AI Statement of Work Architect")
+    st.markdown("Automate enterprise-grade SOW drafting with GenAI.")
 
-    tabs = st.tabs(["Project Overview", "Technical Execution", "Financials"])
+    tabs = st.tabs(["Project Overview", "Technical Plan", "Financials & Export"])
 
     with tabs[0]:
-        st.subheader("Project Overview")
         st.session_state.sow_data["sections"]["2.1 OBJECTIVE"] = st.text_area("2.1 OBJECTIVE", value=st.session_state.sow_data["sections"]["2.1 OBJECTIVE"], height=200, key="area_21")
         st.session_state.sow_data["sections"]["2.2 PROJECT SPONSOR(S) / STAKEHOLDER(S) / PROJECT TEAM"] = st.text_area("2.2 STAKEHOLDERS", value=st.session_state.sow_data["sections"]["2.2 PROJECT SPONSOR(S) / STAKEHOLDER(S) / PROJECT TEAM"], height=200, key="area_22")
         st.session_state.sow_data["sections"]["2.3 ASSUMPTIONS & DEPENDENCIES"] = st.text_area("2.3 ASSUMPTIONS", value=st.session_state.sow_data["sections"]["2.3 ASSUMPTIONS & DEPENDENCIES"], height=200, key="area_23")
         st.session_state.sow_data["sections"]["2.4 PoC Success Criteria"] = st.text_area("2.4 SUCCESS CRITERIA", value=st.session_state.sow_data["sections"]["2.4 PoC Success Criteria"], height=200, key="area_24")
 
     with tabs[1]:
-        st.subheader("Technical Execution")
         st.session_state.sow_data["sections"]["3 SCOPE OF WORK - TECHNICAL PROJECT PLAN"] = st.text_area("3 SCOPE OF WORK", value=st.session_state.sow_data["sections"]["3 SCOPE OF WORK - TECHNICAL PROJECT PLAN"], height=300, key="area_3")
         st.session_state.sow_data["sections"]["4 SOLUTION ARCHITECTURE / ARCHITECTURAL DIAGRAM"] = st.text_area("4 SOLUTION ARCHITECTURE", value=st.session_state.sow_data["sections"]["4 SOLUTION ARCHITECTURE / ARCHITECTURAL DIAGRAM"], height=250, key="area_4")
 
     with tabs[2]:
-        st.subheader("Financials")
         st.session_state.sow_data["sections"]["5 RESOURCES & COST ESTIMATES"] = st.text_area("5 RESOURCES & COSTS", value=st.session_state.sow_data["sections"]["5 RESOURCES & COST ESTIMATES"], height=250, key="area_5")
 
         st.divider()
-        st.subheader("Finalize & Download")
         docx_bytes = create_docx(st.session_state.sow_data)
         st.download_button(
-            label="📥 Download SOW (Word)",
+            label="📥 Download SOW (DOCX)",
             data=docx_bytes,
             file_name=f"SOW_{st.session_state.sow_data['metadata']['customer_name'].replace(' ', '_')}.docx",
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
