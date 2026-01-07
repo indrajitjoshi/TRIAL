@@ -2,6 +2,7 @@ import streamlit as st
 import json
 import io
 import pandas as pd
+import time
 from datetime import datetime
 from docx import Document
 from docx.shared import Pt, Inches
@@ -46,42 +47,65 @@ if 'sow_data' not in st.session_state:
 # --- LLM UTILS ---
 
 def call_gemini(prompt, system_instruction):
-    """Executes a targeted LLM call for a specific SOW section."""
-    try:
-        model = genai.GenerativeModel(
-            model_name="gemini-2.5-flash-preview-09-2025",
-            system_instruction=system_instruction
-        )
-        response = model.generate_content(
-            prompt,
-            generation_config=genai.types.GenerationConfig(temperature=0.3)
-        )
-        return response.text
-    except Exception as e:
-        return f"Error generating section: {str(e)}"
+    """Executes a targeted LLM call for a specific SOW section with exponential backoff."""
+    max_retries = 5
+    for i in range(max_retries):
+        try:
+            model = genai.GenerativeModel(
+                model_name="gemini-2.5-flash-preview-09-2025",
+                system_instruction=system_instruction
+            )
+            response = model.generate_content(
+                prompt,
+                generation_config=genai.types.GenerationConfig(temperature=0.3)
+            )
+            if response and response.text:
+                return response.text
+            else:
+                raise Exception("Empty response from API")
+        except Exception as e:
+            if i == max_retries - 1:
+                return f"Error generating section after {max_retries} attempts: {str(e)}"
+            # Exponential backoff: 1s, 2s, 4s, 8s, 16s
+            time.sleep(2**i)
+    return "Generation failed."
 
 def auto_generate_sow():
     """Triggers the LLM to populate all editable fields based on metadata."""
     meta = st.session_state.sow_data["metadata"]
     context = f"Solution: {meta['solution_type']}, Industry: {meta['industry']}, Type: {meta['engagement_type']}"
 
-    with st.spinner("Agentic drafting in progress..."):
+    # Use a single progress tracking UI
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+
+    try:
         # 1. Project Objective
+        status_text.text("Drafting Project Objective...")
         st.session_state.sow_data["sections"]["objective"] = call_gemini(
             f"Draft a professional business objective for {context}.",
             "You are a senior IT consultant. Write a 2-paragraph objective focusing on business value. No marketing fluff."
         )
+        progress_bar.progress(25)
+
         # 2. Assumptions & Dependencies
+        status_text.text("Expanding Assumptions...")
         st.session_state.sow_data["sections"]["assumptions"] = call_gemini(
             f"List 5 technical assumptions and 3 customer dependencies for {context}.",
             "Format as a professional bulleted list for a legal SOW."
         )
+        progress_bar.progress(50)
+
         # 3. Success Criteria
+        status_text.text("Defining Success Criteria...")
         st.session_state.sow_data["sections"]["success_criteria"] = call_gemini(
             f"Define 4 measurable KPIs for success in this {meta['solution_type']} project.",
             "Focus on metrics like Latency, Accuracy, and User Adoption."
         )
+        progress_bar.progress(75)
+
         # 4. Scope of Work (Technical)
+        status_text.text("Structuring Technical Plan...")
         scope_prompt = f"Create a technical project plan for {context}. Break it into: Infrastructure, Workflows, Backend, and Testing."
         scope_raw = call_gemini(scope_prompt, "Write detailed technical implementation steps. Use professional architectural terminology.")
         
@@ -90,6 +114,15 @@ def auto_generate_sow():
         st.session_state.sow_data["sections"]["core_workflows"] = "Development of RAG pipeline and prompt orchestration logic."
         st.session_state.sow_data["sections"]["backend_components"] = "Integration with existing DynamoDB and vector search indexing."
         st.session_state.sow_data["sections"]["testing_feedback"] = "User Acceptance Testing (UAT) and iterative prompt tuning based on feedback."
+        
+        progress_bar.progress(100)
+        status_text.text("SOW Draft Completed.")
+        time.sleep(1) # Visual confirmation
+        status_text.empty()
+        progress_bar.empty()
+        
+    except Exception as e:
+        st.error(f"An unexpected error occurred during generation: {e}")
 
 # --- EXPORT UTILS ---
 
@@ -165,7 +198,6 @@ def main():
         st.divider()
         if st.button("🪄 Auto-Generate All Content", type="primary", use_container_width=True):
             auto_generate_sow()
-            st.success("Draft Generated!")
 
     st.title("📄 GenAI SOW Architect")
     st.info("Edit any field below. The content is pre-filled by the GenAI Agent but remains fully editable.")
