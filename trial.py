@@ -13,7 +13,7 @@ import google.generativeai as genai
 st.set_page_config(page_title="GenAI SOW Agent", layout="wide", page_icon="📝")
 
 # Gemini API Initialization
-# Use an empty string for the API key; the environment provides it at runtime.
+# The environment provides the key at runtime via this variable.
 apiKey = "" 
 genai.configure(api_key=apiKey)
 
@@ -54,7 +54,7 @@ def generate_selected_content():
         return False
 
     status_placeholder = st.empty()
-    status_placeholder.info(f"🚀 Drafting {len(selected)} sections for {solution}...")
+    status_placeholder.info(f"🚀 AI Agent processing {len(selected)} sections for: {solution}...")
     
     # Mapping keys to descriptive prompts for the AI
     prompt_map = {
@@ -67,14 +67,13 @@ def generate_selected_content():
         "5 RESOURCES & COST ESTIMATES": "Provide a high-level estimate of resource hours and cloud consumption costs."
     }
 
-    # Filter prompts for selected sections only
     targeted_prompts = {k: prompt_map[k] for k in selected}
 
     system_prompt = """
     You are a Senior AI Solutions Architect. Generate professional consulting content for a Statement of Work.
     Return the response ONLY in a structured JSON format where the keys match the section names provided.
     Ensure values are strings containing the draft content. 
-    Tone: Professional, Factual, Formal. No conversational filler or introductory text.
+    Tone: Professional, Factual, Formal. No conversational filler.
     """
     
     user_prompt = f"""
@@ -92,6 +91,7 @@ def generate_selected_content():
 
     for attempt in range(max_retries):
         try:
+            # Re-initializing model inside the loop for freshness
             model = genai.GenerativeModel(
                 model_name="gemini-2.5-flash-preview-09-2025",
                 system_instruction=system_prompt
@@ -100,7 +100,7 @@ def generate_selected_content():
             response = model.generate_content(
                 user_prompt,
                 generation_config=genai.types.GenerationConfig(
-                    temperature=0.3,
+                    temperature=0.2, # Lower temperature for more deterministic/stable output
                     response_mime_type="application/json"
                 ),
                 request_options={"timeout": 60}
@@ -110,47 +110,43 @@ def generate_selected_content():
                 res_text = response.candidates[0].content.parts[0].text
                 generated_data = json.loads(res_text)
                 
-                # Update Session State only for what was generated
+                # Update Session State
                 for section in selected:
-                    # We strip to ensure no trailing newlines or JSON artifacts remain
                     content = generated_data.get(section, "").strip()
                     if content:
                         st.session_state.sow_data["sections"][section] = content
                 
-                status_placeholder.success("✅ SOW Content Ready! Content populated below.")
+                status_placeholder.success("✅ Content Drafted Successfully!")
                 time.sleep(1)
                 status_placeholder.empty()
                 return True
             else:
-                raise Exception("AI returned an empty response.")
+                raise Exception("The AI model returned an empty candidate list.")
                 
         except Exception as e:
             if attempt < max_retries - 1:
+                status_placeholder.warning(f"Drafting in progress... (Attempt {attempt+1}/{max_retries})")
                 time.sleep(retry_delays[attempt])
                 continue
             else:
-                status_placeholder.error(f"Drafting failed after retries: {str(e)}")
+                st.error(f"Generation failed: {str(e)}")
                 return False
 
 # --- EXPORT UTILS ---
 
 def create_docx(data):
     doc = Document()
-    
-    # Header
     title = doc.add_heading('Statement of Work (SOW)', 0)
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
     
-    # Metadata
     sol = data['metadata']['other_solution'] if data['metadata']['solution_type'] == "Other (Please specify)" else data['metadata']['solution_type']
     p = doc.add_paragraph()
     p.add_run(f"Customer: {data['metadata']['customer_name']}\n").bold = True
     p.add_run(f"Solution: {sol}\n")
     p.add_run(f"Date: {datetime.now().strftime('%Y-%m-%d')}\n")
 
-    # Content Sections
     for section_name, content in data['sections'].items():
-        if content: # Only include non-empty sections in the Word doc
+        if content:
             doc.add_heading(section_name, level=1)
             doc.add_paragraph(content)
 
@@ -167,7 +163,6 @@ def main():
     with st.sidebar:
         st.session_state.sow_data["metadata"]["customer_name"] = st.text_input("Customer Name", value=st.session_state.sow_data["metadata"]["customer_name"])
         
-        # 1. Solution Type Selection (Pre-seeded list)
         solution_options = [
             "Multi Agent Store Advisor", "Intelligent Search", "Recommendation", 
             "AI Agents Demand Forecasting", "Banner Audit using LLM", "Image Enhancement", 
@@ -188,8 +183,6 @@ def main():
         st.session_state.sow_data["metadata"]["industry"] = st.selectbox("Industry", ["Financial Services", "Retail", "Healthcare", "Manufacturing", "Legal", "Public Sector"])
         
         st.divider()
-        
-        # 2. Section Selection Checklist
         st.write("### 2. Select Sections to Generate")
         section_list = [
             "2.1 OBJECTIVE", 
@@ -201,7 +194,6 @@ def main():
             "5 RESOURCES & COST ESTIMATES"
         ]
         
-        # Initialize selected_sections based on checkboxes
         st.session_state.sow_data["metadata"]["selected_sections"] = []
         for section in section_list:
             if st.checkbox(section, value=True, key=f"check_{section}"):
@@ -210,86 +202,37 @@ def main():
         st.divider()
         if st.button("🪄 Auto-Draft Selected Sections", type="primary", use_container_width=True):
             if generate_selected_content():
-                st.rerun() # Refresh to update text_area values
+                st.rerun()
 
     st.title("📄 GenAI SOW Architect")
-    st.markdown("Draft and customize production-ready Statements of Work for enterprise AI solutions.")
+    st.markdown("Automate professional enterprise SOW creation with AI agents.")
 
-    # TABS FOR CONTENT REVIEW & EDITING
-    tab_list = ["Project Foundations", "Technical & Architecture", "Resource & Export"]
-    tabs = st.tabs(tab_list)
+    tabs = st.tabs(["Project Foundations", "Technical & Architecture", "Resource & Export"])
 
     with tabs[0]:
         st.subheader("Heading 2: Project Overview")
-        # Use keys for text_area to ensure they stay in sync with state
-        st.session_state.sow_data["sections"]["2.1 OBJECTIVE"] = st.text_area(
-            "2.1 OBJECTIVE", 
-            value=st.session_state.sow_data["sections"]["2.1 OBJECTIVE"], 
-            height=200,
-            key="area_21"
-        )
-        st.session_state.sow_data["sections"]["2.2 PROJECT SPONSOR(S) / STAKEHOLDER(S) / PROJECT TEAM"] = st.text_area(
-            "2.2 STAKEHOLDERS & TEAM", 
-            value=st.session_state.sow_data["sections"]["2.2 PROJECT SPONSOR(S) / STAKEHOLDER(S) / PROJECT TEAM"], 
-            height=200,
-            key="area_22"
-        )
-        st.session_state.sow_data["sections"]["2.3 ASSUMPTIONS & DEPENDENCIES"] = st.text_area(
-            "2.3 ASSUMPTIONS", 
-            value=st.session_state.sow_data["sections"]["2.3 ASSUMPTIONS & DEPENDENCIES"], 
-            height=200,
-            key="area_23"
-        )
-        st.session_state.sow_data["sections"]["2.4 PoC Success Criteria"] = st.text_area(
-            "2.4 SUCCESS CRITERIA", 
-            value=st.session_state.sow_data["sections"]["2.4 PoC Success Criteria"], 
-            height=200,
-            key="area_24"
-        )
+        st.session_state.sow_data["sections"]["2.1 OBJECTIVE"] = st.text_area("2.1 OBJECTIVE", value=st.session_state.sow_data["sections"]["2.1 OBJECTIVE"], height=200, key="area_21")
+        st.session_state.sow_data["sections"]["2.2 PROJECT SPONSOR(S) / STAKEHOLDER(S) / PROJECT TEAM"] = st.text_area("2.2 STAKEHOLDERS", value=st.session_state.sow_data["sections"]["2.2 PROJECT SPONSOR(S) / STAKEHOLDER(S) / PROJECT TEAM"], height=200, key="area_22")
+        st.session_state.sow_data["sections"]["2.3 ASSUMPTIONS & DEPENDENCIES"] = st.text_area("2.3 ASSUMPTIONS", value=st.session_state.sow_data["sections"]["2.3 ASSUMPTIONS & DEPENDENCIES"], height=200, key="area_23")
+        st.session_state.sow_data["sections"]["2.4 PoC Success Criteria"] = st.text_area("2.4 SUCCESS CRITERIA", value=st.session_state.sow_data["sections"]["2.4 PoC Success Criteria"], height=200, key="area_24")
 
     with tabs[1]:
         st.subheader("Heading 3 & 4: Technical Execution")
-        st.session_state.sow_data["sections"]["3 SCOPE OF WORK - TECHNICAL PROJECT PLAN"] = st.text_area(
-            "3 SCOPE OF WORK", 
-            value=st.session_state.sow_data["sections"]["3 SCOPE OF WORK - TECHNICAL PROJECT PLAN"], 
-            height=300,
-            key="area_3"
-        )
-        st.session_state.sow_data["sections"]["4 SOLUTION ARCHITECTURE / ARCHITECTURAL DIAGRAM"] = st.text_area(
-            "4 SOLUTION ARCHITECTURE", 
-            value=st.session_state.sow_data["sections"]["4 SOLUTION ARCHITECTURE / ARCHITECTURAL DIAGRAM"], 
-            height=250,
-            key="area_4"
-        )
+        st.session_state.sow_data["sections"]["3 SCOPE OF WORK - TECHNICAL PROJECT PLAN"] = st.text_area("3 SCOPE OF WORK", value=st.session_state.sow_data["sections"]["3 SCOPE OF WORK - TECHNICAL PROJECT PLAN"], height=300, key="area_3")
+        st.session_state.sow_data["sections"]["4 SOLUTION ARCHITECTURE / ARCHITECTURAL DIAGRAM"] = st.text_area("4 SOLUTION ARCHITECTURE", value=st.session_state.sow_data["sections"]["4 SOLUTION ARCHITECTURE / ARCHITECTURAL DIAGRAM"], height=250, key="area_4")
 
     with tabs[2]:
         st.subheader("Heading 5: Financials")
-        st.session_state.sow_data["sections"]["5 RESOURCES & COST ESTIMATES"] = st.text_area(
-            "5 RESOURCES & COSTS", 
-            value=st.session_state.sow_data["sections"]["5 RESOURCES & COST ESTIMATES"], 
-            height=250,
-            key="area_5"
-        )
+        st.session_state.sow_data["sections"]["5 RESOURCES & COST ESTIMATES"] = st.text_area("5 RESOURCES & COSTS", value=st.session_state.sow_data["sections"]["5 RESOURCES & COST ESTIMATES"], height=250, key="area_5")
 
         st.divider()
         st.subheader("Finalize & Download")
-        d_col1, d_col2 = st.columns(2)
-        
         docx_bytes = create_docx(st.session_state.sow_data)
-        d_col1.download_button(
-            label="📥 Download SOW (Word Docx)",
+        st.download_button(
+            label="📥 Download SOW (Word)",
             data=docx_bytes,
             file_name=f"SOW_{st.session_state.sow_data['metadata']['customer_name'].replace(' ', '_')}.docx",
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            use_container_width=True
-        )
-
-        backup_json = json.dumps(st.session_state.sow_data, indent=4)
-        d_col2.download_button(
-            label="💾 Backup Project (JSON)",
-            data=backup_json,
-            file_name="sow_archive.json",
-            mime="application/json",
             use_container_width=True
         )
 
