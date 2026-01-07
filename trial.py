@@ -3,28 +3,20 @@ import json
 import io
 import time
 import os
+import requests
 from datetime import datetime
 from docx import Document
-from docx.shared import Pt
+from docx.shared import Pt, Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-from transformers import pipeline
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="GenAI SOW Agent", layout="wide", page_icon="📝")
 
-# --- LLM ENGINE INITIALIZATION ---
-# Using the requested Hugging Face model: GLM-4.7
-@st.cache_resource
-def load_llm():
-    try:
-        # Initializing the pipeline for text generation
-        pipe = pipeline("text-generation", model="zai-org/GLM-4.7", device_map="auto")
-        return pipe
-    except Exception as e:
-        st.error(f"Failed to load Hugging Face model: {e}")
-        return None
-
-llm_pipeline = load_llm()
+# --- API BRIDGE CONFIGURATION ---
+# Using the standard environment endpoint for Gemini 2.5 Flash
+API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent"
+# The execution environment provides the key at runtime.
+apiKey = "" 
 
 # --- SESSION STATE INITIALIZATION ---
 if 'sow_data' not in st.session_state:
@@ -48,17 +40,53 @@ if 'sow_data' not in st.session_state:
         }
     }
 
-# --- GENERATION ENGINE ---
+# --- LLM ENGINE ---
+
+def call_gemini_api(prompt):
+    """
+    Direct HTTP call to the Gemini API to bypass SDK overhead and stabilize connections.
+    Implements mandatory exponential backoff.
+    """
+    headers = {'Content-Type': 'application/json'}
+    payload = {
+        "contents": [{
+            "parts": [{"text": prompt}]
+        }],
+        "generationConfig": {
+            "temperature": 0.3,
+            "maxOutputTokens": 1500
+        }
+    }
+    
+    max_retries = 5
+    retry_delays = [1, 2, 4, 8, 16]
+    
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(
+                f"{API_URL}?key={apiKey}",
+                headers=headers,
+                json=payload,
+                timeout=120 # Generous timeout for complex enterprise sections
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                return result['candidates'][0]['content']['parts'][0]['text']
+            elif response.status_code in [429, 503, 504]:
+                time.sleep(retry_delays[attempt])
+            else:
+                return f"API Error (Status {response.status_code}): {response.text}"
+        except Exception as e:
+            if attempt == max_retries - 1:
+                return f"Connection Failed: {str(e)}"
+            time.sleep(retry_delays[attempt])
+    return "The AI service is currently overloaded. Please try again in a few moments."
 
 def generate_selected_content():
     """
-    Iterative drafting engine using GLM-4 Hugging Face pipeline.
-    Processes sections one-by-one to ensure stability.
+    Iterative drafting engine. Processes sections one-by-one to ensure stability.
     """
-    if llm_pipeline is None:
-        st.error("AI Model pipeline is not initialized. Please check backend logs.")
-        return False
-
     meta = st.session_state.sow_data["metadata"]
     solution = meta["other_solution"] if meta["solution_type"] == "Other (Please specify)" else meta["solution_type"]
     selected = meta["selected_sections"]
@@ -83,25 +111,15 @@ def generate_selected_content():
     for i, section_key in enumerate(selected):
         status_placeholder.info(f"⏳ Section ({i+1}/{len(selected)}): {section_key} is being drafted...")
         
-        # Constructing message for GLM-4
-        messages = [
-            {"role": "system", "content": "You are a professional SOW Architect. Write formal, concise, and technical document content. No greetings or intros."},
-            {"role": "user", "content": f"Industry: {meta['industry']}\nSolution: {solution}\nTask: {prompt_map[section_key]}"}
-        ]
+        system_instruction = "You are a professional SOW Architect. Write formal, concise, and technical document content. No greetings or intros."
+        prompt = f"System: {system_instruction}\n\nIndustry: {meta['industry']}\nSolution: {solution}\nTask: {prompt_map[section_key]}"
         
-        try:
-            # Invoking the pipeline
-            result = llm_pipeline(messages, max_new_tokens=1024, do_sample=True, temperature=0.3)
-            # Extracting the generated text
-            generated_text = result[0]['generated_text'][-1]['content']
-            
-            if generated_text:
-                st.session_state.sow_data["sections"][section_key] = generated_text.strip()
-            else:
-                raise Exception("Model returned empty text.")
-                
-        except Exception as e:
-            st.error(f"❌ Failed to draft {section_key}. Error: {str(e)}")
+        generated_text = call_gemini_api(prompt)
+        
+        if "API Error" not in generated_text and "Connection Failed" not in generated_text:
+            st.session_state.sow_data["sections"][section_key] = generated_text.strip()
+        else:
+            st.error(f"❌ {generated_text}")
 
     status_placeholder.success("✅ Drafting complete! Review your sections below.")
     time.sleep(1)
@@ -189,7 +207,7 @@ def main():
                 st.rerun()
 
     st.title("📄 AI Statement of Work Architect")
-    st.markdown("Automate enterprise-grade SOW drafting with GLM-4.")
+    st.markdown("Automate enterprise-grade SOW drafting with high-fidelity GenAI.")
 
     tabs = st.tabs(["Project Overview", "Technical Plan", "Financials & Export"])
 
