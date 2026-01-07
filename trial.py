@@ -15,7 +15,6 @@ st.set_page_config(page_title="GenAI SOW Agent", layout="wide", page_icon="📝"
 
 # Gemini API Initialization
 # The execution environment provides the key at runtime. 
-# We initialize as an empty string as per environment protocols.
 apiKey = "" 
 genai.configure(api_key=apiKey)
 
@@ -45,7 +44,7 @@ if 'sow_data' not in st.session_state:
 def generate_selected_content():
     """
     Generates content only for the sections selected by the user.
-    Uses Gemini 2.5 Flash with optimized timeout and robust error handling.
+    Uses an iterative approach (one call per section) for maximum reliability and speed.
     """
     meta = st.session_state.sow_data["metadata"]
     solution = meta["other_solution"] if meta["solution_type"] == "Other (Please specify)" else meta["solution_type"]
@@ -56,90 +55,66 @@ def generate_selected_content():
         return False
 
     status_placeholder = st.empty()
-    status_placeholder.info(f"🚀 AI Agent initiating drafting for {len(selected)} sections. This may take a moment...")
     
     prompt_map = {
         "2.1 OBJECTIVE": "Write a 2-paragraph professional business objective for this solution.",
         "2.2 PROJECT SPONSOR(S) / STAKEHOLDER(S) / PROJECT TEAM": "Describe the ideal project team structure including Sponsor, Tech Lead, and SME roles.",
-        "2.3 ASSUMPTIONS & DEPENDENCIES": "List 5 technical assumptions and 3 customer dependencies (e.g. data access, API keys).",
-        "2.4 PoC Success Criteria": "Define 4 measurable KPIs for this PoC (e.g. Accuracy, Latency, Adoption).",
+        "2.3 ASSUMPTIONS & DEPENDENCIES": "List 5 technical assumptions and 3 customer dependencies (e.g. data access, API keys). Use bullets.",
+        "2.4 PoC Success Criteria": "Define 4 measurable KPIs for this PoC (e.g. Accuracy, Latency, Adoption). Use bullets.",
         "3 SCOPE OF WORK - TECHNICAL PROJECT PLAN": "Detail the technical work plan phases: Discovery, Infra, Development, and Testing.",
         "4 SOLUTION ARCHITECTURE / ARCHITECTURAL DIAGRAM": "Describe the high-level AWS architecture components (Bedrock, Lambda, OpenSearch) required.",
-        "5 RESOURCES & COST ESTIMATES": "Provide a high-level estimate of resource hours and cloud consumption costs."
+        "5 RESOURCES & COST ESTIMATES": "Provide a high-level estimate of resource roles needed and potential cloud consumption costs."
     }
 
-    targeted_prompts = {k: prompt_map[k] for k in selected}
+    # Iterate through selected sections and generate content for each
+    # This is MUCH more reliable than one giant JSON request
+    for i, section_key in enumerate(selected):
+        status_placeholder.info(f"⏳ AI Agent drafting section ({i+1}/{len(selected)}): {section_key}...")
+        
+        system_prompt = "You are a Senior AI Solutions Architect. Write professional, formal SOW content. Do not use conversational filler, greetings, or markdown headers."
+        
+        user_prompt = f"""
+        Solution: {solution}
+        Industry: {meta['industry']}
+        Task: {prompt_map[section_key]}
+        """
 
-    # Simplified system instruction to avoid initialization hangs
-    system_prompt = "You are a Senior AI Solutions Architect. You must respond only in JSON format."
-    
-    user_prompt = f"""
-    Generate professional Statement of Work (SOW) content for the following solution:
-    Solution: {solution}
-    Industry: {meta['industry']}
-    
-    Return a JSON object where the keys are the section titles and the values are the content.
-    Sections to generate:
-    {json.dumps(targeted_prompts, indent=2)}
-    
-    Ensure the content is professional, formal, and free of conversational filler.
-    """
+        max_retries = 3
+        retry_delays = [1, 2, 4]
+        success = False
 
-    max_retries = 5
-    retry_delays = [1, 2, 4, 8, 16]
+        for attempt in range(max_retries):
+            try:
+                model = genai.GenerativeModel(
+                    model_name="gemini-2.5-flash-preview-09-2025",
+                    system_instruction=system_prompt
+                )
+                
+                response = model.generate_content(
+                    user_prompt,
+                    generation_config=genai.types.GenerationConfig(
+                        temperature=0.3,
+                        max_output_tokens=1000,
+                    ),
+                    request_options={"timeout": 60} 
+                )
+                
+                if response and response.text:
+                    st.session_state.sow_data["sections"][section_key] = response.text.strip()
+                    success = True
+                    break
+                else:
+                    raise Exception("Empty response")
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delays[attempt])
+                else:
+                    st.error(f"Failed to generate {section_key}: {str(e)}")
 
-    for attempt in range(max_retries):
-        try:
-            # Re-initialize the model specifically for this call
-            model = genai.GenerativeModel(
-                model_name="gemini-2.5-flash-preview-09-2025",
-                system_instruction=system_prompt
-            )
-            
-            # Using a slightly higher temperature (0.4) can sometimes help the model 'break' through a hang
-            # Increased timeout to the maximum allowed (120s)
-            response = model.generate_content(
-                user_prompt,
-                generation_config=genai.types.GenerationConfig(
-                    temperature=0.4,
-                    response_mime_type="application/json",
-                ),
-                request_options={"timeout": 120} 
-            )
-            
-            if response and response.candidates:
-                res_text = response.candidates[0].content.parts[0].text
-                
-                # Robust parsing with fallback
-                try:
-                    generated_data = json.loads(res_text)
-                except json.JSONDecodeError:
-                    # If JSON fails, we try a manual parse for keys or fallback to raw
-                    st.warning("AI response structure was unexpected. Re-attempting format conversion...")
-                    generated_data = {section: res_text for section in selected}
-                
-                # Success: Map generated data back to session state
-                for section in selected:
-                    content = generated_data.get(section, "").strip()
-                    if content:
-                        st.session_state.sow_data["sections"][section] = content
-                
-                status_placeholder.success("✅ Content Drafted Successfully!")
-                time.sleep(0.5)
-                status_placeholder.empty()
-                return True
-            else:
-                raise Exception("Empty candidate response from Gemini.")
-                
-        except Exception as e:
-            if attempt < max_retries - 1:
-                status_placeholder.warning(f"Drafting in progress... (Attempt {attempt+1}/5). The model is processing complex sections.")
-                time.sleep(retry_delays[attempt])
-                continue
-            else:
-                st.error(f"Generation failed after multiple attempts: {str(e)}")
-                st.info("Tip: Try selecting fewer sections at a time to reduce complexity.")
-                return False
+    status_placeholder.success("✅ All selected sections drafted successfully!")
+    time.sleep(1)
+    status_placeholder.empty()
+    return True
 
 # --- EXPORT UTILS ---
 
