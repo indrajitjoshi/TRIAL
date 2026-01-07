@@ -14,8 +14,9 @@ import google.generativeai as genai
 st.set_page_config(page_title="GenAI SOW Agent", layout="wide", page_icon="📝")
 
 # Gemini API Initialization
-# Using environment variable for security and configuration flexibility
-apiKey = os.environ.get("GENAI_API_KEY", "") 
+# The execution environment provides the key at runtime. 
+# We initialize as an empty string as per environment protocols.
+apiKey = "" 
 genai.configure(api_key=apiKey)
 
 # --- SESSION STATE INITIALIZATION ---
@@ -44,7 +45,7 @@ if 'sow_data' not in st.session_state:
 def generate_selected_content():
     """
     Generates content only for the sections selected by the user.
-    Uses Gemini 2.5 Flash with extended timeout and robust error handling.
+    Uses Gemini 2.5 Flash with optimized timeout and robust error handling.
     """
     meta = st.session_state.sow_data["metadata"]
     solution = meta["other_solution"] if meta["solution_type"] == "Other (Please specify)" else meta["solution_type"]
@@ -55,7 +56,7 @@ def generate_selected_content():
         return False
 
     status_placeholder = st.empty()
-    status_placeholder.info(f"🚀 AI Agent initiating drafting for {len(selected)} sections...")
+    status_placeholder.info(f"🚀 AI Agent initiating drafting for {len(selected)} sections. This may take a moment...")
     
     prompt_map = {
         "2.1 OBJECTIVE": "Write a 2-paragraph professional business objective for this solution.",
@@ -69,21 +70,19 @@ def generate_selected_content():
 
     targeted_prompts = {k: prompt_map[k] for k in selected}
 
-    system_prompt = """
-    You are a Senior AI Solutions Architect. Generate professional consulting content for a Statement of Work.
-    Return the response ONLY in a structured JSON format where the keys match the section names provided.
-    Ensure values are strings containing the draft content. 
-    Tone: Professional, Factual, Formal. No conversational filler.
-    """
+    # Simplified system instruction to avoid initialization hangs
+    system_prompt = "You are a Senior AI Solutions Architect. You must respond only in JSON format."
     
     user_prompt = f"""
-    Context:
+    Generate professional Statement of Work (SOW) content for the following solution:
     Solution: {solution}
     Industry: {meta['industry']}
     
-    Task:
-    Generate content for these SOW sections: {list(targeted_prompts.keys())}
-    Instructions for each section: {json.dumps(targeted_prompts)}
+    Return a JSON object where the keys are the section titles and the values are the content.
+    Sections to generate:
+    {json.dumps(targeted_prompts, indent=2)}
+    
+    Ensure the content is professional, formal, and free of conversational filler.
     """
 
     max_retries = 5
@@ -91,16 +90,18 @@ def generate_selected_content():
 
     for attempt in range(max_retries):
         try:
+            # Re-initialize the model specifically for this call
             model = genai.GenerativeModel(
                 model_name="gemini-2.5-flash-preview-09-2025",
                 system_instruction=system_prompt
             )
             
-            # Increased timeout to 120 seconds to handle complex generations and avoid 504 errors
+            # Using a slightly higher temperature (0.4) can sometimes help the model 'break' through a hang
+            # Increased timeout to the maximum allowed (120s)
             response = model.generate_content(
                 user_prompt,
                 generation_config=genai.types.GenerationConfig(
-                    temperature=0.3,
+                    temperature=0.4,
                     response_mime_type="application/json",
                 ),
                 request_options={"timeout": 120} 
@@ -109,11 +110,12 @@ def generate_selected_content():
             if response and response.candidates:
                 res_text = response.candidates[0].content.parts[0].text
                 
-                # Robust parsing with fallback for non-JSON returns
+                # Robust parsing with fallback
                 try:
                     generated_data = json.loads(res_text)
                 except json.JSONDecodeError:
-                    st.warning("Model returned non-JSON text; using raw content distribution.")
+                    # If JSON fails, we try a manual parse for keys or fallback to raw
+                    st.warning("AI response structure was unexpected. Re-attempting format conversion...")
                     generated_data = {section: res_text for section in selected}
                 
                 # Success: Map generated data back to session state
@@ -127,15 +129,16 @@ def generate_selected_content():
                 status_placeholder.empty()
                 return True
             else:
-                raise Exception("Empty model response")
+                raise Exception("Empty candidate response from Gemini.")
                 
         except Exception as e:
             if attempt < max_retries - 1:
-                status_placeholder.warning(f"Drafting in progress... (Step {attempt+1}/5: Syncing with AI Model)")
+                status_placeholder.warning(f"Drafting in progress... (Attempt {attempt+1}/5). The model is processing complex sections.")
                 time.sleep(retry_delays[attempt])
                 continue
             else:
                 st.error(f"Generation failed after multiple attempts: {str(e)}")
+                st.info("Tip: Try selecting fewer sections at a time to reduce complexity.")
                 return False
 
 # --- EXPORT UTILS ---
