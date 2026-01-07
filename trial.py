@@ -46,108 +46,71 @@ if 'sow_data' not in st.session_state:
 
 # --- LLM UTILS ---
 
-def call_gemini(prompt, system_instruction):
-    """Executes a targeted LLM call for a specific SOW section with exponential backoff."""
-    max_retries = 3
-    for i in range(max_retries):
-        try:
-            model = genai.GenerativeModel(
-                model_name="gemini-2.5-flash-preview-09-2025",
-                system_instruction=system_instruction
-            )
-            # Use non-streaming generate_content
-            response = model.generate_content(
-                prompt,
-                generation_config=genai.types.GenerationConfig(
-                    temperature=0.3,
-                    max_output_tokens=1500
-                )
-            )
-            if response and response.candidates:
-                text = response.candidates[0].content.parts[0].text
-                if text and len(text.strip()) > 0:
-                    return text.strip()
-            
-            # If we get here, something was empty
-            if i < max_retries - 1:
-                time.sleep(2)
-                continue
-            return "Error: Received empty response from the AI model."
-            
-        except Exception as e:
-            if i == max_retries - 1:
-                return f"Error after {max_retries} attempts: {str(e)}"
-            # Exponential backoff: 2s, 4s, 8s
-            time.sleep(2**(i+1))
-    return "Generation failed due to connection issues."
-
-def auto_generate_sow():
-    """Triggers the LLM to populate all editable fields based on metadata."""
+def fast_generate_sow():
+    """Generates all SOW sections in a single structured call to avoid multiple round-trip delays."""
     meta = st.session_state.sow_data["metadata"]
     context = f"Solution: {meta['solution_type']}, Industry: {meta['industry']}, Type: {meta['engagement_type']}"
-
-    # UI tracking
-    progress_bar = st.progress(0)
+    
     status_text = st.empty()
+    status_text.warning("⚡ AI is drafting the entire SOW... Please wait (est. 10-15 seconds).")
+    
+    system_prompt = """
+    You are a senior AI Solutions Architect. Generate a professional Statement of Work.
+    Return the response in a structured JSON format with the following keys:
+    'objective', 'assumptions', 'success_criteria', 'infra_setup', 'core_workflows'.
+    Use professional consulting tone. No marketing fluff.
+    """
+    
+    user_prompt = f"""
+    Context: {context} for {meta['customer_name']}.
+    Please provide:
+    1. A 2-paragraph business objective.
+    2. A bulleted list of 5 assumptions and 3 dependencies.
+    3. 4 measurable success KPIs.
+    4. Detailed AWS Infrastructure setup (VPC, Lambda, Bedrock).
+    5. Description of the core RAG or Agentic data flow logic.
+    """
 
     try:
-        # 1. Project Objective
-        status_text.warning("Drafting Project Objective... (Step 1/5)")
-        res_obj = call_gemini(
-            f"Draft a professional business objective for {context}.",
-            "You are a senior IT consultant. Write a 2-paragraph objective focusing on business value. No marketing language."
+        model = genai.GenerativeModel(
+            model_name="gemini-2.5-flash-preview-09-2025",
+            system_instruction=system_prompt
         )
-        st.session_state.sow_data["sections"]["objective"] = res_obj
-        progress_bar.progress(20)
-
-        # 2. Assumptions & Dependencies
-        status_text.warning("Expanding Assumptions... (Step 2/5)")
-        res_ass = call_gemini(
-            f"List 5 technical assumptions and 3 customer dependencies for {context}.",
-            "Format as a professional bulleted list for a legal SOW. Do not include introductory text."
-        )
-        st.session_state.sow_data["sections"]["assumptions"] = res_ass
-        progress_bar.progress(40)
-
-        # 3. Success Criteria
-        status_text.warning("Defining Success Criteria... (Step 3/5)")
-        res_succ = call_gemini(
-            f"Define 4 measurable KPIs for success in this {meta['solution_type']} project.",
-            "Focus on metrics like Latency, Accuracy, and User Adoption. Use a bulleted list."
-        )
-        st.session_state.sow_data["sections"]["success_criteria"] = res_succ
-        progress_bar.progress(60)
-
-        # 4. Technical Scope (Infra/Workflows)
-        status_text.warning("Structuring Technical Infrastructure... (Step 4/5)")
-        res_infra = call_gemini(
-            f"Detail the Infrastructure Setup requirements for a {meta['solution_type']} on AWS.",
-            "Describe VPC, compute (Lambda/ECS), and LLM endpoint (Bedrock) requirements professionally."
-        )
-        st.session_state.sow_data["sections"]["infra_setup"] = res_infra
-        progress_bar.progress(80)
-
-        # 5. Core Workflows & Backend
-        status_text.warning("Finalizing Core Workflows... (Step 5/5)")
-        res_flow = call_gemini(
-            f"Describe the core logical workflows for {context}, specifically RAG or Agentic flows.",
-            "Write a professional description of the data flow and orchestration logic."
-        )
-        st.session_state.sow_data["sections"]["core_workflows"] = res_flow
         
-        # Pre-filling static components for reliability
-        st.session_state.sow_data["sections"]["backend_components"] = f"Integration with {meta['industry']}-specific data sources, vector database (OpenSearch/Pinecone), and identity management systems."
-        st.session_state.sow_data["sections"]["testing_feedback"] = "Execution of comprehensive UAT, prompt engineering optimization cycles, and performance benchmarking against latency targets."
+        response = model.generate_content(
+            user_prompt,
+            generation_config=genai.types.GenerationConfig(
+                temperature=0.3,
+                response_mime_type="application/json"
+            )
+        )
         
-        progress_bar.progress(100)
-        status_text.success("SOW Draft Completed Successfully.")
-        time.sleep(1.5)
-        status_text.empty()
-        progress_bar.empty()
-        
+        if response and response.candidates:
+            res_text = response.candidates[0].content.parts[0].text
+            data = json.loads(res_text)
+            
+            # Update Session State
+            st.session_state.sow_data["sections"]["objective"] = data.get("objective", "")
+            st.session_state.sow_data["sections"]["assumptions"] = data.get("assumptions", "")
+            st.session_state.sow_data["sections"]["success_criteria"] = data.get("success_criteria", "")
+            st.session_state.sow_data["sections"]["infra_setup"] = data.get("infra_setup", "")
+            st.session_state.sow_data["sections"]["core_workflows"] = data.get("core_workflows", "")
+            
+            # Static pre-fills for reliability
+            st.session_state.sow_data["sections"]["backend_components"] = f"Integration with {meta['industry']}-specific data sources and vector stores."
+            st.session_state.sow_data["sections"]["testing_feedback"] = "Comprehensive UAT and prompt optimization cycles."
+            
+            status_text.success("✅ SOW Generated Successfully!")
+            time.sleep(1)
+            status_text.empty()
+            return True
+        else:
+            status_text.error("AI returned an empty response.")
+            return False
+            
     except Exception as e:
-        status_text.error(f"Generation interrupted: {str(e)}")
-        st.error(f"Detailed Error: {e}")
+        status_text.error(f"Generation failed: {str(e)}")
+        return False
 
 # --- EXPORT UTILS ---
 
@@ -222,8 +185,8 @@ def main():
         
         st.divider()
         if st.button("🪄 Auto-Generate All Content", type="primary", use_container_width=True):
-            auto_generate_sow()
-            st.rerun() # Force immediate UI sync
+            if fast_generate_sow():
+                st.rerun()
 
     st.title("📄 GenAI SOW Architect")
     st.info("Edit any field below. Click 'Auto-Generate' in the sidebar to populate content using Gemini Pro.")
