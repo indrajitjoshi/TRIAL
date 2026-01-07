@@ -34,166 +34,145 @@ pipe = load_llm()
 if "sow_data" not in st.session_state:
     st.session_state.sow_data = {
         "metadata": {
-            "solution_name": "WIMO Bot",
-            "industry": "Retail / QSR",
             "customer_name": "Customer Name",
-            "partner_name": "Partner Name",
+            "industry": "Retail",
+            "solution_type": "Multi Agent Store Advisor",
+            "other_solution": "",
             "raw_objective": ""
         },
+        "tables": {
+            "partner_sponsor": [],
+            "customer_sponsor": [],
+            "cloud_sponsor": [],
+            "escalation_contacts": []
+        },
         "sections": {
-            "2.1 OBJECTIVE": "",
-            "2.2 PROJECT SPONSOR(S) / STAKEHOLDER(S) / PROJECT TEAM": "",
-            "2.3 ASSUMPTIONS & DEPENDENCIES": "",
-            "2.4 PROJECT SUCCESS CRITERIA": "",
-            "3 SCOPE OF WORK - TECHNICAL PROJECT PLAN": "",
-            "4 SOLUTION ARCHITECTURE / ARCHITECTURAL DIAGRAM": "",
-            "6 RESOURCES & COST ESTIMATES": ""
+            "objective": "",
+            "assumptions": "",
+            "dependencies": "",
+            "success_demo": "",
+            "success_results": "",
+            "scope": "",
+            "architecture": "",
+            "commercials": ""
         }
     }
 
 # -------------------------------------------------
-# LLM CALL
+# LLM HELPER
 # -------------------------------------------------
-def call_llm(prompt: str) -> str:
-    try:
-        result = pipe(
-            prompt,
-            max_new_tokens=500,
-            temperature=0.2
-        )
-        return result[0]["generated_text"].strip()
-    except Exception as e:
-        return f"Error: {str(e)}"
+def call_llm(prompt):
+    result = pipe(prompt, max_new_tokens=300, temperature=0.2)
+    return result[0]["generated_text"].strip()
 
 # -------------------------------------------------
-# GENERATION ENGINE (STRICT SOW FORMAT)
+# GENERATION LOGIC
 # -------------------------------------------------
 def generate_sow():
     meta = st.session_state.sow_data["metadata"]
     sec = st.session_state.sow_data["sections"]
+    tbl = st.session_state.sow_data["tables"]
 
-    status = st.empty()
-    status.info("⏳ Generating enterprise-grade SOW...")
+    solution = meta["other_solution"] if meta["solution_type"] == "Other (Please specify)" else meta["solution_type"]
 
-    # 2.1 OBJECTIVE
-    sec["2.1 OBJECTIVE"] = call_llm(f"""
-Write ONLY the Objective section in a formal SOW tone.
+    # OBJECTIVE
+    sec["objective"] = call_llm(
+        f"Write a 2–3 sentence formal SOW Objective for a {solution} POC in the {meta['industry']} industry."
+    )
 
-Context:
-- Solution: {meta['solution_name']}
-- Industry: {meta['industry']}
-- Business Problem: {meta['raw_objective']}
+    # STAKEHOLDER TABLE ROWS
+    def gen_table_rows(role):
+        text = call_llm(
+            f"Generate 2 rows of {role} stakeholders for a {solution} POC. "
+            f"Return format: Name | Title | Email"
+        )
+        rows = []
+        for line in text.split("\n"):
+            if "|" in line:
+                rows.append([c.strip() for c in line.split("|")])
+        return rows
 
-Constraints:
-- 2–3 sentences
-- Consulting-style language
-- No headings, no bullets
-""")
+    tbl["partner_sponsor"] = gen_table_rows("Partner Executive Sponsor")
+    tbl["customer_sponsor"] = gen_table_rows("Customer Executive Sponsor")
+    tbl["cloud_sponsor"] = gen_table_rows("Cloud Executive Sponsor")
+    tbl["escalation_contacts"] = gen_table_rows("Project Escalation Contact")
 
-    # 2.2 STAKEHOLDERS
-    sec["2.2 PROJECT SPONSOR(S) / STAKEHOLDER(S) / PROJECT TEAM"] = call_llm(f"""
-Create a structured stakeholder section for a POC SOW.
+    # ASSUMPTIONS / DEPENDENCIES
+    sec["dependencies"] = call_llm(
+        f"List 2 customer dependencies required before starting a {solution} POC."
+    )
+    sec["assumptions"] = call_llm(
+        f"List 2 delivery assumptions for the implementation partner in a {solution} POC."
+    )
 
-Include:
-- Partner Executive Sponsor
-- Customer Executive Sponsor
-- Cloud / Technology Sponsor
-- Project Escalation Contacts
+    # SUCCESS CRITERIA
+    sec["success_demo"] = call_llm(
+        f"List 3 demonstration capabilities for a {solution} GenAI POC."
+    )
+    sec["success_results"] = call_llm(
+        f"List 2 measurable outcomes expected from a {solution} POC."
+    )
 
-Use table-like bullet formatting with:
-Name | Title | Responsibility
-""")
+    # SCOPE
+    sec["scope"] = call_llm(
+        f"Describe a 4-phase technical implementation plan with timelines for a {solution} POC."
+    )
 
-    # 2.3 ASSUMPTIONS & DEPENDENCIES
-    sec["2.3 ASSUMPTIONS & DEPENDENCIES"] = call_llm(f"""
-Write this section exactly in the following structure:
+    # ARCHITECTURE
+    sec["architecture"] = call_llm(
+        f"Describe high-level cloud and GenAI architecture for a {solution} POC."
+    )
 
-Dependencies:
-- List 2–3 customer dependencies required before POC start
-
-Assumptions:
-- List 2–3 delivery assumptions by the implementation partner
-
-Tone: Formal, contractual, POC-specific
-""")
-
-    # 2.4 SUCCESS CRITERIA
-    sec["2.4 PROJECT SUCCESS CRITERIA"] = call_llm(f"""
-Create Project Success Criteria in this exact format:
-
-1. Demonstrations:
-- Bullet points of demo capabilities
-
-2. Results:
-- Bullet points of expected technical outcomes
-
-Context: {meta['solution_name']} GenAI POC
-""")
-
-    # 3 SCOPE OF WORK
-    sec["3 SCOPE OF WORK - TECHNICAL PROJECT PLAN"] = call_llm(f"""
-Write Scope of Work using this structure:
-
-1. Requirements Gathering & Design (Estimated Time: 1 week)
-- Bulleted activities
-
-2. Model / Bot Development (Estimated Time: 1 week)
-- Bulleted activities
-
-3. Integration & UI (Estimated Time: 1 week)
-- Bulleted activities
-
-4. Delivery & Demonstration (Estimated Time: 1 week)
-- Bulleted activities
-
-Tone: Consulting SOW
-""")
-
-    # 4 ARCHITECTURE
-    sec["4 SOLUTION ARCHITECTURE / ARCHITECTURAL DIAGRAM"] = call_llm(f"""
-Describe high-level solution architecture for a GenAI POC.
-
-Include:
-- UI layer
-- API / orchestration layer
-- LLM / embeddings
-- Data sources
-- Security considerations
-
-Do NOT include diagrams, only text.
-""")
-
-    # 6 COMMERCIALS
-    sec["6 RESOURCES & COST ESTIMATES"] = call_llm(f"""
-Write a short commercial section stating:
-
-- POC is a one-time investment
-- Jointly funded or exploratory in nature
-- Costs indicative and subject to post-POC decisions
-
-Tone: Enterprise SOW
-""")
-
-    status.success("✅ SOW Generated Successfully")
-    time.sleep(1)
-    status.empty()
+    # COMMERCIALS
+    sec["commercials"] = call_llm(
+        f"Write a short commercial note stating that the POC is exploratory and one-time funded."
+    )
 
 # -------------------------------------------------
-# DOCX EXPORT
+# DOCX EXPORT (TABLES PRESERVED)
 # -------------------------------------------------
 def create_docx(data):
     doc = Document()
-    title = doc.add_heading("Scope of Work (SOW)", 0)
-    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    doc.add_heading("Scope of Work (SOW)", 0)
 
-    p = doc.add_paragraph()
-    p.add_run(f"Customer: {data['metadata']['customer_name']}\n").bold = True
-    p.add_run(f"Solution: {data['metadata']['solution_name']}\n")
-    p.add_run(f"Date: {datetime.now().strftime('%d %B %Y')}")
+    meta = data["metadata"]
+    doc.add_paragraph(f"Customer: {meta['customer_name']}")
+    doc.add_paragraph(f"Solution: {meta['solution_type']}")
+    doc.add_paragraph(f"Date: {datetime.now().strftime('%d %B %Y')}")
 
-    for section, content in data["sections"].items():
-        doc.add_heading(section, level=1)
-        doc.add_paragraph(content)
+    doc.add_heading("2.1 OBJECTIVE", 1)
+    doc.add_paragraph(data["sections"]["objective"])
+
+    def add_table(title, rows):
+        doc.add_heading(title, 2)
+        table = doc.add_table(rows=1, cols=3)
+        table.style = "Table Grid"
+        table.rows[0].cells[:] = ["Name", "Title", "Email / Contact Info"]
+        for r in rows:
+            table.add_row().cells[:] = r
+
+    doc.add_heading("2.2 PROJECT SPONSORS / STAKEHOLDERS", 1)
+    add_table("Partner Executive Sponsor", data["tables"]["partner_sponsor"])
+    add_table("Customer Executive Sponsor", data["tables"]["customer_sponsor"])
+    add_table("Cloud Executive Sponsor", data["tables"]["cloud_sponsor"])
+    add_table("Project Escalation Contacts", data["tables"]["escalation_contacts"])
+
+    doc.add_heading("2.3 ASSUMPTIONS & DEPENDENCIES", 1)
+    doc.add_paragraph("Dependencies:\n" + data["sections"]["dependencies"])
+    doc.add_paragraph("Assumptions:\n" + data["sections"]["assumptions"])
+
+    doc.add_heading("2.4 PROJECT SUCCESS CRITERIA", 1)
+    doc.add_paragraph("Demonstrations:\n" + data["sections"]["success_demo"])
+    doc.add_paragraph("Results:\n" + data["sections"]["success_results"])
+
+    doc.add_heading("3 SCOPE OF WORK", 1)
+    doc.add_paragraph(data["sections"]["scope"])
+
+    doc.add_heading("4 SOLUTION ARCHITECTURE", 1)
+    doc.add_paragraph(data["sections"]["architecture"])
+
+    doc.add_heading("6 RESOURCES & COST ESTIMATES", 1)
+    doc.add_paragraph(data["sections"]["commercials"])
 
     buf = io.BytesIO()
     doc.save(buf)
@@ -204,41 +183,41 @@ def create_docx(data):
 # UI
 # -------------------------------------------------
 def main():
-    st.sidebar.title("🛠️ SOW Inputs")
-
     meta = st.session_state.sow_data["metadata"]
 
-    meta["customer_name"] = st.sidebar.text_input("Customer Name", meta["customer_name"])
-    meta["solution_name"] = st.sidebar.text_input("Solution Name", meta["solution_name"])
-    meta["industry"] = st.sidebar.text_input("Industry", meta["industry"])
+    st.sidebar.title("🛠️ SOW Inputs")
 
-    meta["raw_objective"] = st.sidebar.text_area(
-        "Business Objective",
-        placeholder="Describe the business problem the POC is solving..."
+    meta["customer_name"] = st.sidebar.text_input("Customer Name", meta["customer_name"])
+    meta["industry"] = st.sidebar.selectbox("Industry", ["Retail", "Financial Services", "Healthcare"])
+
+    meta["solution_type"] = st.sidebar.selectbox(
+        "Solution Type",
+        [
+            "Multi Agent Store Advisor",
+            "Virtual Data Analyst",
+            "Customer Service Bot",
+            "Document Audit Bot",
+            "Other (Please specify)"
+        ]
     )
 
-    if st.sidebar.button("🪄 Generate SOW", use_container_width=True):
+    if meta["solution_type"] == "Other (Please specify)":
+        meta["other_solution"] = st.sidebar.text_input("Specify Solution")
+
+    meta["raw_objective"] = st.sidebar.text_area("Business Objective")
+
+    if st.sidebar.button("🪄 Generate SOW"):
         generate_sow()
         st.rerun()
 
-    st.title("📄 Generated Statement of Work")
-
-    for section in st.session_state.sow_data["sections"]:
-        st.text_area(
-            section,
-            st.session_state.sow_data["sections"][section],
-            height=220
-        )
-
-    st.divider()
+    st.title("📄 Generated SOW")
     docx = create_docx(st.session_state.sow_data)
 
     st.download_button(
         "📥 Download SOW (DOCX)",
         docx,
         file_name="Generated_SOW.docx",
-        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        use_container_width=True
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     )
 
 if __name__ == "__main__":
