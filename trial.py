@@ -43,7 +43,7 @@ if 'sow_data' not in st.session_state:
 def generate_selected_content():
     """
     Generates content only for the sections selected by the user.
-    Uses Gemini 2.5 Flash for professional SOW drafting with exponential backoff.
+    Uses Gemini 2.5 Flash with optimized timeout and simplified schema to avoid stalls.
     """
     meta = st.session_state.sow_data["metadata"]
     solution = meta["other_solution"] if meta["solution_type"] == "Other (Please specify)" else meta["solution_type"]
@@ -54,9 +54,8 @@ def generate_selected_content():
         return False
 
     status_placeholder = st.empty()
-    status_placeholder.info(f"🚀 AI Agent processing {len(selected)} sections for: {solution}...")
+    status_placeholder.info(f"🚀 AI Agent initiating drafting for {len(selected)} sections...")
     
-    # Mapping keys to descriptive prompts for the AI
     prompt_map = {
         "2.1 OBJECTIVE": "Write a 2-paragraph professional business objective for this solution.",
         "2.2 PROJECT SPONSOR(S) / STAKEHOLDER(S) / PROJECT TEAM": "Describe the ideal project team structure including Sponsor, Tech Lead, and SME roles.",
@@ -81,9 +80,9 @@ def generate_selected_content():
     Solution: {solution}
     Industry: {meta['industry']}
     
-    Instructions:
-    Generate content for the following SOW sections as specified in the JSON schema:
-    {json.dumps(targeted_prompts, indent=2)}
+    Task:
+    Generate content for these SOW sections: {list(targeted_prompts.keys())}
+    Instructions for each section: {json.dumps(targeted_prompts)}
     """
 
     max_retries = 5
@@ -91,45 +90,46 @@ def generate_selected_content():
 
     for attempt in range(max_retries):
         try:
-            # Re-initializing model inside the loop for freshness
+            # We use flash-preview-09-2025 as it is the most responsive for structured JSON
             model = genai.GenerativeModel(
                 model_name="gemini-2.5-flash-preview-09-2025",
                 system_instruction=system_prompt
             )
             
+            # Use non-streaming with a slightly shorter timeout per attempt to trigger retries faster
             response = model.generate_content(
                 user_prompt,
                 generation_config=genai.types.GenerationConfig(
-                    temperature=0.2, # Lower temperature for more deterministic/stable output
-                    response_mime_type="application/json"
+                    temperature=0.3,
+                    response_mime_type="application/json",
                 ),
-                request_options={"timeout": 60}
+                request_options={"timeout": 45} 
             )
             
             if response and response.candidates:
                 res_text = response.candidates[0].content.parts[0].text
                 generated_data = json.loads(res_text)
                 
-                # Update Session State
+                # Success: Map generated data back to session state
                 for section in selected:
                     content = generated_data.get(section, "").strip()
                     if content:
                         st.session_state.sow_data["sections"][section] = content
                 
                 status_placeholder.success("✅ Content Drafted Successfully!")
-                time.sleep(1)
+                time.sleep(0.5)
                 status_placeholder.empty()
                 return True
             else:
-                raise Exception("The AI model returned an empty candidate list.")
+                raise Exception("Empty model response")
                 
         except Exception as e:
             if attempt < max_retries - 1:
-                status_placeholder.warning(f"Drafting in progress... (Attempt {attempt+1}/{max_retries})")
+                status_placeholder.warning(f"Drafting in progress... (Step {attempt+1}/5: Syncing with AI Model)")
                 time.sleep(retry_delays[attempt])
                 continue
             else:
-                st.error(f"Generation failed: {str(e)}")
+                st.error(f"Generation failed after multiple attempts: {str(e)}")
                 return False
 
 # --- EXPORT UTILS ---
