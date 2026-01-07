@@ -14,7 +14,7 @@ import google.generativeai as genai
 st.set_page_config(page_title="GenAI SOW Agent", layout="wide", page_icon="📝")
 
 # Gemini API Initialization
-# The environment provides the key; we set it to an empty string as per instructions
+# The execution environment provides the key at runtime.
 apiKey = "" 
 genai.configure(api_key=apiKey)
 
@@ -55,14 +55,19 @@ def call_gemini(prompt, system_instruction):
                 model_name="gemini-2.5-flash-preview-09-2025",
                 system_instruction=system_instruction
             )
+            # Use non-streaming generate_content
             response = model.generate_content(
                 prompt,
-                generation_config=genai.types.GenerationConfig(temperature=0.3)
+                generation_config=genai.types.GenerationConfig(
+                    temperature=0.3,
+                    max_output_tokens=1000
+                )
             )
-            if response and response.text:
-                return response.text
-            else:
-                raise Exception("Empty response from API")
+            if response and response.candidates:
+                text = response.candidates[0].content.parts[0].text
+                if text:
+                    return text.strip()
+            raise Exception("Empty or invalid response from API")
         except Exception as e:
             if i == max_retries - 1:
                 return f"Error generating section after {max_retries} attempts: {str(e)}"
@@ -75,7 +80,7 @@ def auto_generate_sow():
     meta = st.session_state.sow_data["metadata"]
     context = f"Solution: {meta['solution_type']}, Industry: {meta['industry']}, Type: {meta['engagement_type']}"
 
-    # Use a single progress tracking UI
+    # UI tracking
     progress_bar = st.progress(0)
     status_text = st.empty()
 
@@ -84,40 +89,48 @@ def auto_generate_sow():
         status_text.text("Drafting Project Objective...")
         st.session_state.sow_data["sections"]["objective"] = call_gemini(
             f"Draft a professional business objective for {context}.",
-            "You are a senior IT consultant. Write a 2-paragraph objective focusing on business value. No marketing fluff."
+            "You are a senior IT consultant. Write a 2-paragraph objective focusing on business value. No marketing language."
         )
-        progress_bar.progress(25)
+        progress_bar.progress(20)
 
         # 2. Assumptions & Dependencies
         status_text.text("Expanding Assumptions...")
         st.session_state.sow_data["sections"]["assumptions"] = call_gemini(
             f"List 5 technical assumptions and 3 customer dependencies for {context}.",
-            "Format as a professional bulleted list for a legal SOW."
+            "Format as a professional bulleted list for a legal SOW. Do not include introductory text."
         )
-        progress_bar.progress(50)
+        progress_bar.progress(40)
 
         # 3. Success Criteria
         status_text.text("Defining Success Criteria...")
         st.session_state.sow_data["sections"]["success_criteria"] = call_gemini(
             f"Define 4 measurable KPIs for success in this {meta['solution_type']} project.",
-            "Focus on metrics like Latency, Accuracy, and User Adoption."
+            "Focus on metrics like Latency, Accuracy, and User Adoption. Use a bulleted list."
         )
-        progress_bar.progress(75)
+        progress_bar.progress(60)
 
-        # 4. Scope of Work (Technical)
-        status_text.text("Structuring Technical Plan...")
-        scope_prompt = f"Create a technical project plan for {context}. Break it into: Infrastructure, Workflows, Backend, and Testing."
-        scope_raw = call_gemini(scope_prompt, "Write detailed technical implementation steps. Use professional architectural terminology.")
+        # 4. Technical Scope (Infra/Workflows)
+        status_text.text("Structuring Technical Infrastructure...")
+        st.session_state.sow_data["sections"]["infra_setup"] = call_gemini(
+            f"Detail the Infrastructure Setup requirements for a {meta['solution_type']} on AWS.",
+            "Describe VPC, compute (Lambda/ECS), and LLM endpoint (Bedrock) requirements professionally."
+        )
+        progress_bar.progress(80)
+
+        # 5. Core Workflows & Backend
+        status_text.text("Finalizing Core Workflows...")
+        st.session_state.sow_data["sections"]["core_workflows"] = call_gemini(
+            f"Describe the core logical workflows for {context}, specifically RAG or Agentic flows.",
+            "Write a professional description of the data flow and orchestration logic."
+        )
         
-        # Simple splitting logic for demo (In production, use structured JSON output from LLM)
-        st.session_state.sow_data["sections"]["infra_setup"] = "Provisioning of AWS environment, VPC setup, and Bedrock endpoint configuration."
-        st.session_state.sow_data["sections"]["core_workflows"] = "Development of RAG pipeline and prompt orchestration logic."
-        st.session_state.sow_data["sections"]["backend_components"] = "Integration with existing DynamoDB and vector search indexing."
-        st.session_state.sow_data["sections"]["testing_feedback"] = "User Acceptance Testing (UAT) and iterative prompt tuning based on feedback."
+        # Pre-filling static components for reliability
+        st.session_state.sow_data["sections"]["backend_components"] = f"Integration with {meta['industry']}-specific data sources, vector database (OpenSearch/Pinecone), and identity management systems."
+        st.session_state.sow_data["sections"]["testing_feedback"] = "Execution of comprehensive UAT, prompt engineering optimization cycles, and performance benchmarking against latency targets."
         
         progress_bar.progress(100)
         status_text.text("SOW Draft Completed.")
-        time.sleep(1) # Visual confirmation
+        time.sleep(1)
         status_text.empty()
         progress_bar.empty()
         
@@ -198,9 +211,10 @@ def main():
         st.divider()
         if st.button("🪄 Auto-Generate All Content", type="primary", use_container_width=True):
             auto_generate_sow()
+            st.rerun() # Ensure the main UI refreshes with new state
 
     st.title("📄 GenAI SOW Architect")
-    st.info("Edit any field below. The content is pre-filled by the GenAI Agent but remains fully editable.")
+    st.info("Edit any field below. Click 'Auto-Generate' in the sidebar to populate content using Gemini Pro.")
 
     # TABS FOR EDITING
     tab1, tab2, tab3 = st.tabs(["📋 Project Overview", "⚙️ Technical Scope", "💰 Costing & Export"])
@@ -208,33 +222,33 @@ def main():
     with tab1:
         st.subheader("1. Project Overview")
         st.session_state.sow_data["sections"]["objective"] = st.text_area("Project Objective", 
-            value=st.session_state.sow_data["sections"]["objective"], height=200)
+            value=st.session_state.sow_data["sections"]["objective"], height=200, key="ta_objective")
         
         st.session_state.sow_data["sections"]["assumptions"] = st.text_area("Assumptions & Dependencies", 
-            value=st.session_state.sow_data["sections"]["assumptions"], height=200)
+            value=st.session_state.sow_data["sections"]["assumptions"], height=200, key="ta_assumptions")
         
         st.session_state.sow_data["sections"]["success_criteria"] = st.text_area("PoC Success Criteria", 
-            value=st.session_state.sow_data["sections"]["success_criteria"], height=150)
+            value=st.session_state.sow_data["sections"]["success_criteria"], height=150, key="ta_success")
 
     with tab2:
         st.subheader("2. Scope of Work (Technical Plan)")
         st.session_state.sow_data["sections"]["infra_setup"] = st.text_area("Infrastructure Setup", 
-            value=st.session_state.sow_data["sections"]["infra_setup"], height=100)
+            value=st.session_state.sow_data["sections"]["infra_setup"], height=120, key="ta_infra")
         
         st.session_state.sow_data["sections"]["core_workflows"] = st.text_area("Core Workflows", 
-            value=st.session_state.sow_data["sections"]["core_workflows"], height=150)
+            value=st.session_state.sow_data["sections"]["core_workflows"], height=150, key="ta_workflows")
         
         st.session_state.sow_data["sections"]["backend_components"] = st.text_area("Backend Components", 
-            value=st.session_state.sow_data["sections"]["backend_components"], height=100)
+            value=st.session_state.sow_data["sections"]["backend_components"], height=100, key="ta_backend")
         
         st.session_state.sow_data["sections"]["testing_feedback"] = st.text_area("Testing & Feedback", 
-            value=st.session_state.sow_data["sections"]["testing_feedback"], height=100)
+            value=st.session_state.sow_data["sections"]["testing_feedback"], height=100, key="ta_testing")
 
     with tab3:
         st.subheader("3. Costing Calculator")
         c1, c2, c3 = st.columns(3)
-        vol = c1.number_input("Transaction Volume", value=st.session_state.sow_data["costing"]["volume"])
-        unit = c2.number_input("Unit Cost ($)", value=st.session_state.sow_data["costing"]["unit_cost"], format="%.4f")
+        vol = c1.number_input("Transaction Volume", value=int(st.session_state.sow_data["costing"]["volume"]))
+        unit = c2.number_input("Unit Cost ($)", value=float(st.session_state.sow_data["costing"]["unit_cost"]), format="%.4f")
         total = vol * unit
         st.session_state.sow_data["costing"]["volume"] = vol
         st.session_state.sow_data["costing"]["unit_cost"] = unit
@@ -247,9 +261,10 @@ def main():
         col_ex1, col_ex2 = st.columns(2)
         
         # DOCX Generation
-        docx_btn = col_ex1.download_button(
+        docx_data = create_docx(st.session_state.sow_data)
+        col_ex1.download_button(
             label="📥 Download SOW (DOCX)",
-            data=create_docx(st.session_state.sow_data),
+            data=docx_data,
             file_name=f"SOW_{st.session_state.sow_data['metadata']['customer_name']}.docx",
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             use_container_width=True
