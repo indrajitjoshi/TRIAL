@@ -27,8 +27,11 @@ def load_llm():
 pipe = load_llm()
 
 # -------------------------------------------------
-# SESSION STATE
+# INITIAL DATA
 # -------------------------------------------------
+def empty_row():
+    return {"Name": "", "Title": "", "Email": ""}
+
 if "sow_data" not in st.session_state:
     st.session_state.sow_data = {
         "metadata": {
@@ -39,15 +42,15 @@ if "sow_data" not in st.session_state:
             "raw_objective": ""
         },
         "tables": {
-            "partner_sponsor": [],
-            "customer_sponsor": [],
-            "cloud_sponsor": [],
-            "escalation_contacts": []
+            "partner": [empty_row()],
+            "customer": [empty_row()],
+            "cloud": [empty_row()],
+            "escalation": [empty_row()]
         },
         "sections": {
             "objective": "",
-            "assumptions": "",
             "dependencies": "",
+            "assumptions": "",
             "success_demo": "",
             "success_results": "",
             "scope": "",
@@ -64,63 +67,61 @@ def call_llm(prompt: str) -> str:
     return result[0]["generated_text"].strip()
 
 # -------------------------------------------------
-# GENERATION ENGINE
+# GENERATE INITIAL CONTENT
 # -------------------------------------------------
 def generate_sow():
     meta = st.session_state.sow_data["metadata"]
     sec = st.session_state.sow_data["sections"]
-    tbl = st.session_state.sow_data["tables"]
 
     solution = meta["other_solution"] if meta["solution_type"] == "Other (Please specify)" else meta["solution_type"]
 
     sec["objective"] = call_llm(
         f"Write a formal 2–3 sentence SOW objective for a {solution} POC in the {meta['industry']} industry."
     )
-
-    def gen_table(role):
-        text = call_llm(
-            f"Generate 2 stakeholders for {role}. "
-            f"Return each row on a new line in this format: Name | Title | Email"
-        )
-        rows = []
-        for line in text.split("\n"):
-            if "|" in line:
-                parts = [p.strip() for p in line.split("|")]
-                if len(parts) == 3:
-                    rows.append(parts)
-        return rows
-
-    tbl["partner_sponsor"] = gen_table("Partner Executive Sponsor")
-    tbl["customer_sponsor"] = gen_table("Customer Executive Sponsor")
-    tbl["cloud_sponsor"] = gen_table("Cloud Executive Sponsor")
-    tbl["escalation_contacts"] = gen_table("Project Escalation Contact")
-
     sec["dependencies"] = call_llm(f"List 2 customer dependencies for a {solution} POC.")
     sec["assumptions"] = call_llm(f"List 2 delivery assumptions for a {solution} POC.")
-    sec["success_demo"] = call_llm(f"List 3 demo capabilities for a {solution} POC.")
+    sec["success_demo"] = call_llm(f"List 3 demonstration capabilities for a {solution} POC.")
     sec["success_results"] = call_llm(f"List 2 expected outcomes for a {solution} POC.")
-    sec["scope"] = call_llm(f"Describe a 4-phase technical delivery plan with timelines for a {solution} POC.")
-    sec["architecture"] = call_llm(f"Describe high-level cloud and GenAI architecture for a {solution} POC.")
-    sec["commercials"] = call_llm(f"Write a short POC commercial note (one-time, exploratory investment).")
+    sec["scope"] = call_llm(f"Describe a 4-phase technical delivery plan with timelines.")
+    sec["architecture"] = call_llm(f"Describe high-level GenAI solution architecture.")
+    sec["commercials"] = call_llm(f"Write a short POC commercial note.")
 
 # -------------------------------------------------
-# DOCX EXPORT (FIXED TABLE HANDLING)
+# TABLE EDITOR
 # -------------------------------------------------
-def add_table(doc, title, rows):
+def editable_table(title, key):
+    st.subheader(title)
+    rows = st.session_state.sow_data["tables"][key]
+
+    for i, row in enumerate(rows):
+        cols = st.columns(3)
+        row["Name"] = cols[0].text_input("Name", row["Name"], key=f"{key}_name_{i}")
+        row["Title"] = cols[1].text_input("Title", row["Title"], key=f"{key}_title_{i}")
+        row["Email"] = cols[2].text_input("Email / Contact Info", row["Email"], key=f"{key}_email_{i}")
+
+    if st.button(f"➕ Add row to {title}", key=f"add_{key}"):
+        rows.append(empty_row())
+        st.rerun()
+
+# -------------------------------------------------
+# DOCX EXPORT
+# -------------------------------------------------
+def add_docx_table(doc, title, rows):
     doc.add_heading(title, level=2)
     table = doc.add_table(rows=1, cols=3)
     table.style = "Table Grid"
 
-    hdr_cells = table.rows[0].cells
-    hdr_cells[0].text = "Name"
-    hdr_cells[1].text = "Title"
-    hdr_cells[2].text = "Email / Contact Info"
+    hdr = table.rows[0].cells
+    hdr[0].text = "Name"
+    hdr[1].text = "Title"
+    hdr[2].text = "Email / Contact Info"
 
     for r in rows:
-        row_cells = table.add_row().cells
-        row_cells[0].text = r[0]
-        row_cells[1].text = r[1]
-        row_cells[2].text = r[2]
+        if r["Name"] or r["Title"] or r["Email"]:
+            row = table.add_row().cells
+            row[0].text = r["Name"]
+            row[1].text = r["Title"]
+            row[2].text = r["Email"]
 
 def create_docx(data):
     doc = Document()
@@ -131,31 +132,33 @@ def create_docx(data):
     doc.add_paragraph(f"Solution: {meta['solution_type']}")
     doc.add_paragraph(f"Date: {datetime.now().strftime('%d %B %Y')}")
 
+    sec = data["sections"]
+
     doc.add_heading("2.1 OBJECTIVE", 1)
-    doc.add_paragraph(data["sections"]["objective"])
+    doc.add_paragraph(sec["objective"])
 
     doc.add_heading("2.2 PROJECT SPONSORS / STAKEHOLDERS", 1)
-    add_table(doc, "Partner Executive Sponsor", data["tables"]["partner_sponsor"])
-    add_table(doc, "Customer Executive Sponsor", data["tables"]["customer_sponsor"])
-    add_table(doc, "Cloud Executive Sponsor", data["tables"]["cloud_sponsor"])
-    add_table(doc, "Project Escalation Contacts", data["tables"]["escalation_contacts"])
+    add_docx_table(doc, "Partner Executive Sponsor", data["tables"]["partner"])
+    add_docx_table(doc, "Customer Executive Sponsor", data["tables"]["customer"])
+    add_docx_table(doc, "Cloud Executive Sponsor", data["tables"]["cloud"])
+    add_docx_table(doc, "Project Escalation Contacts", data["tables"]["escalation"])
 
     doc.add_heading("2.3 ASSUMPTIONS & DEPENDENCIES", 1)
-    doc.add_paragraph("Dependencies:\n" + data["sections"]["dependencies"])
-    doc.add_paragraph("Assumptions:\n" + data["sections"]["assumptions"])
+    doc.add_paragraph("Dependencies:\n" + sec["dependencies"])
+    doc.add_paragraph("Assumptions:\n" + sec["assumptions"])
 
     doc.add_heading("2.4 PROJECT SUCCESS CRITERIA", 1)
-    doc.add_paragraph("Demonstrations:\n" + data["sections"]["success_demo"])
-    doc.add_paragraph("Results:\n" + data["sections"]["success_results"])
+    doc.add_paragraph("Demonstrations:\n" + sec["success_demo"])
+    doc.add_paragraph("Results:\n" + sec["success_results"])
 
     doc.add_heading("3 SCOPE OF WORK - TECHNICAL PROJECT PLAN", 1)
-    doc.add_paragraph(data["sections"]["scope"])
+    doc.add_paragraph(sec["scope"])
 
     doc.add_heading("4 SOLUTION ARCHITECTURE / ARCHITECTURAL DIAGRAM", 1)
-    doc.add_paragraph(data["sections"]["architecture"])
+    doc.add_paragraph(sec["architecture"])
 
     doc.add_heading("6 RESOURCES & COST ESTIMATES", 1)
-    doc.add_paragraph(data["sections"]["commercials"])
+    doc.add_paragraph(sec["commercials"])
 
     buf = io.BytesIO()
     doc.save(buf)
@@ -212,18 +215,37 @@ def main():
 
     meta["raw_objective"] = st.sidebar.text_area("Business Objective")
 
-    if st.sidebar.button("🪄 Generate SOW"):
+    if st.sidebar.button("🪄 Generate Initial Draft"):
         generate_sow()
         st.rerun()
 
-    st.title("📄 Generated SOW")
-    docx = create_docx(st.session_state.sow_data)
+    st.title("📄 Editable SOW")
 
+    st.text_area("2.1 OBJECTIVE", st.session_state.sow_data["sections"]["objective"], height=150, key="obj")
+
+    editable_table("Partner Executive Sponsor", "partner")
+    editable_table("Customer Executive Sponsor", "customer")
+    editable_table("Cloud Executive Sponsor", "cloud")
+    editable_table("Project Escalation Contacts", "escalation")
+
+    for label, key in [
+        ("Dependencies", "dependencies"),
+        ("Assumptions", "assumptions"),
+        ("Demonstrations", "success_demo"),
+        ("Results", "success_results"),
+        ("Scope of Work", "scope"),
+        ("Solution Architecture", "architecture"),
+        ("Commercials", "commercials")
+    ]:
+        st.text_area(label, st.session_state.sow_data["sections"][key], height=150, key=key)
+
+    docx = create_docx(st.session_state.sow_data)
     st.download_button(
         "📥 Download SOW (DOCX)",
         docx,
         file_name="Generated_SOW.docx",
-        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        use_container_width=True
     )
 
 if __name__ == "__main__":
