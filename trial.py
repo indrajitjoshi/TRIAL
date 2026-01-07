@@ -3,20 +3,24 @@ import json
 import io
 import time
 import os
-import requests
 from datetime import datetime
 from docx import Document
 from docx.shared import Pt, Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+import google.generativeai as genai
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="GenAI SOW Agent", layout="wide", page_icon="📝")
 
-# --- API BRIDGE CONFIGURATION ---
-# Using Gemini 2.5 Flash via direct HTTP to ensure stability in this environment.
-API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent"
-# apiKey is provided by the execution environment at runtime.
+# --- STABILITY OVERRIDES ---
+# Disable client certificate checks which often cause 503/504 hangs in sandboxed environments
+os.environ["GOOGLE_API_USE_CLIENT_CERTIFICATE"] = "false"
+os.environ["GRPC_DNS_RESOLVER"] = "native"
+
+# --- API INITIALIZATION ---
+# The environment provides the key at runtime. We use an empty string for the default configuration.
 apiKey = "" 
+genai.configure(api_key=apiKey, transport='rest')
 
 # --- SESSION STATE INITIALIZATION ---
 if 'sow_data' not in st.session_state:
@@ -42,47 +46,45 @@ if 'sow_data' not in st.session_state:
 
 # --- LLM ENGINE ---
 
-def call_gemini_api(prompt):
+def call_genai_service(prompt):
     """
-    Direct HTTP call to the Gemini API. 
-    This method is used to bypass SDK-specific library requirements like transformers/torch.
+    Stable call wrapper using Gemini 1.5 Pro with REST transport and aggressive retries.
     """
-    headers = {'Content-Type': 'application/json'}
-    payload = {
-        "contents": [{
-            "parts": [{"text": prompt}]
-        }],
-        "generationConfig": {
-            "temperature": 0.3,
-            "maxOutputTokens": 1500
-        }
-    }
-    
-    max_retries = 5
-    retry_delays = [2, 4, 8, 16, 32]
-    
-    for attempt in range(max_retries):
-        try:
-            response = requests.post(
-                f"{API_URL}?key={apiKey}",
-                headers=headers,
-                json=payload,
-                timeout=120 
-            )
-            
-            if response.status_code == 200:
-                result = response.json()
-                return result['candidates'][0]['content']['parts'][0]['text']
-            elif response.status_code in [429, 503, 504]:
+    try:
+        # Switched to gemini-1.5-pro for higher reasoning quality
+        model = genai.GenerativeModel(
+            model_name="gemini-1.5-pro",
+            system_instruction="You are a professional SOW Architect. Write formal, technical, and concise document content. No greetings, no intros, no conversational filler."
+        )
+        
+        # Mandatory Exponential Backoff
+        max_retries = 5
+        retry_delays = [2, 4, 8, 16, 32]
+        
+        for attempt in range(max_retries):
+            try:
+                response = model.generate_content(
+                    prompt,
+                    generation_config=genai.types.GenerationConfig(
+                        temperature=0.3,
+                        max_output_tokens=2048, # Increased for Pro model capacity
+                    ),
+                    request_options={"timeout": 180} # Increased timeout for Pro reasoning
+                )
+                
+                if response and response.text:
+                    return response.text.strip()
+                else:
+                    raise Exception("Model returned empty content.")
+                    
+            except Exception as e:
+                if attempt == max_retries - 1:
+                    return f"Error: {str(e)}"
                 time.sleep(retry_delays[attempt])
-            else:
-                return f"Error: API returned status {response.status_code}"
-        except Exception as e:
-            if attempt == max_retries - 1:
-                return f"Error: {str(e)}"
-            time.sleep(retry_delays[attempt])
-            
-    return "Error: AI service timed out."
+    except Exception as e:
+        return f"Initialization Error: {str(e)}"
+    
+    return "Error: Unknown failure in AI service."
 
 def generate_selected_content():
     """
@@ -110,19 +112,18 @@ def generate_selected_content():
     }
 
     for i, section_key in enumerate(selected):
-        status_placeholder.info(f"⏳ Drafting {section_key} ({i+1}/{len(selected)})...")
+        status_placeholder.info(f"⏳ AI Agent drafting {section_key} ({i+1}/{len(selected)}) using Gemini Pro...")
         
-        system_instruction = "You are a professional SOW Architect. Write formal, technical, and concise document content. No greetings, no intros."
-        prompt = f"System: {system_instruction}\n\nTask: {prompt_map[section_key]}"
+        prompt = f"Context: {meta['industry']} industry.\nTask: {prompt_map[section_key]}"
         
-        generated_text = call_gemini_api(prompt)
+        generated_text = call_genai_service(prompt)
         
         if "Error:" not in generated_text:
-            st.session_state.sow_data["sections"][section_key] = generated_text.strip()
+            st.session_state.sow_data["sections"][section_key] = generated_text
         else:
             st.error(f"❌ Failed to draft {section_key}: {generated_text}")
 
-    status_placeholder.success("✅ SOW drafting complete!")
+    status_placeholder.success("✅ Drafting complete!")
     time.sleep(1)
     status_placeholder.empty()
     return True
@@ -208,7 +209,7 @@ def main():
                 st.rerun()
 
     st.title("📄 AI Statement of Work Architect")
-    st.markdown("Automate enterprise-grade SOW drafting with high-fidelity GenAI.")
+    st.markdown("Automate enterprise-grade SOW drafting with Gemini 1.5 Pro.")
 
     tabs = st.tabs(["Project Overview", "Technical Plan", "Financials & Export"])
 
