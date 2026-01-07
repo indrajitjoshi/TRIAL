@@ -47,16 +47,19 @@ if 'sow_data' not in st.session_state:
 # --- LLM UTILS ---
 
 def fast_generate_sow():
-    """Generates all SOW sections in a single structured call with increased timeout to handle 504 errors."""
+    """
+    Generates all SOW sections in a single structured call.
+    Implements mandatory exponential backoff (up to 5 retries) to handle 504/Timeout errors.
+    """
     meta = st.session_state.sow_data["metadata"]
     context = f"Solution: {meta['solution_type']}, Industry: {meta['industry']}, Type: {meta['engagement_type']}"
     
     status_text = st.empty()
-    status_text.warning("⚡ AI is drafting the entire SOW... Please wait (est. 15-20 seconds).")
+    status_text.warning("⚡ AI is drafting the entire SOW... Please wait (this can take up to 60 seconds).")
     
     system_prompt = """
     You are a senior AI Solutions Architect. Generate a professional Statement of Work.
-    Return the response in a structured JSON format with the following keys:
+    Return the response ONLY in a structured JSON format with the following keys:
     'objective', 'assumptions', 'success_criteria', 'infra_setup', 'core_workflows'.
     Use professional consulting tone. No marketing fluff.
     """
@@ -71,52 +74,63 @@ def fast_generate_sow():
     5. Description of the core RAG or Agentic data flow logic.
     """
 
-    try:
-        model = genai.GenerativeModel(
-            model_name="gemini-2.5-flash-preview-09-2025",
-            system_instruction=system_prompt
-        )
-        
-        # Adding request_options to increase the timeout to 60 seconds to avoid 504 Gateway/Deadline issues
-        response = model.generate_content(
-            user_prompt,
-            generation_config=genai.types.GenerationConfig(
-                temperature=0.3,
-                response_mime_type="application/json"
-            ),
-            request_options={"timeout": 60}
-        )
-        
-        if response and response.candidates:
-            res_text = response.candidates[0].content.parts[0].text
-            data = json.loads(res_text)
+    max_retries = 5
+    retry_delays = [1, 2, 4, 8, 16]
+
+    for attempt in range(max_retries):
+        try:
+            model = genai.GenerativeModel(
+                model_name="gemini-2.5-flash-preview-09-2025",
+                system_instruction=system_prompt
+            )
             
-            # Update Session State
-            st.session_state.sow_data["sections"]["objective"] = data.get("objective", "")
-            st.session_state.sow_data["sections"]["assumptions"] = data.get("assumptions", "")
-            st.session_state.sow_data["sections"]["success_criteria"] = data.get("success_criteria", "")
-            st.session_state.sow_data["sections"]["infra_setup"] = data.get("infra_setup", "")
-            st.session_state.sow_data["sections"]["core_workflows"] = data.get("core_workflows", "")
+            # Use non-streaming generate_content with a timeout
+            response = model.generate_content(
+                user_prompt,
+                generation_config=genai.types.GenerationConfig(
+                    temperature=0.3,
+                    response_mime_type="application/json"
+                ),
+                request_options={"timeout": 60}
+            )
             
-            # Static pre-fills for reliability
-            st.session_state.sow_data["sections"]["backend_components"] = f"Integration with {meta['industry']}-specific data sources and vector stores."
-            st.session_state.sow_data["sections"]["testing_feedback"] = "Comprehensive UAT and prompt optimization cycles."
-            
-            status_text.success("✅ SOW Generated Successfully!")
-            time.sleep(1)
-            status_text.empty()
-            return True
-        else:
-            status_text.error("AI returned an empty response. Please try again.")
-            return False
-            
-    except Exception as e:
-        error_msg = str(e)
-        if "504" in error_msg or "Deadline Exceeded" in error_msg:
-            status_text.error("⌛ The request timed out (504). The AI model is taking longer than expected. Please try clicking 'Auto-Generate' again.")
-        else:
-            status_text.error(f"Generation failed: {error_msg}")
-        return False
+            if response and response.candidates:
+                res_text = response.candidates[0].content.parts[0].text
+                data = json.loads(res_text)
+                
+                # Update Session State
+                st.session_state.sow_data["sections"]["objective"] = data.get("objective", "")
+                st.session_state.sow_data["sections"]["assumptions"] = data.get("assumptions", "")
+                st.session_state.sow_data["sections"]["success_criteria"] = data.get("success_criteria", "")
+                st.session_state.sow_data["sections"]["infra_setup"] = data.get("infra_setup", "")
+                st.session_state.sow_data["sections"]["core_workflows"] = data.get("core_workflows", "")
+                
+                # Static pre-fills for reliability
+                st.session_state.sow_data["sections"]["backend_components"] = f"Integration with {meta['industry']}-specific data sources and vector stores."
+                st.session_state.sow_data["sections"]["testing_feedback"] = "Comprehensive UAT and prompt optimization cycles."
+                
+                status_text.success("✅ SOW Generated Successfully!")
+                time.sleep(1)
+                status_text.empty()
+                return True
+            else:
+                # If attempt fails to return content, treat as an error for retry
+                raise Exception("Empty response from AI model.")
+                
+        except Exception as e:
+            error_msg = str(e)
+            # Check if we should retry
+            if attempt < max_retries - 1:
+                # Implement exponential backoff delay
+                time.sleep(retry_delays[attempt])
+                continue
+            else:
+                # Final attempt failed
+                if "504" in error_msg or "Deadline" in error_msg or "timeout" in error_msg.lower():
+                    status_text.error("⌛ The request timed out repeatedly. The AI model is currently taking longer than allowed. Please try again in a few moments.")
+                else:
+                    status_text.error(f"Generation failed after {max_retries} attempts: {error_msg}")
+                return False
 
 # --- EXPORT UTILS ---
 
@@ -263,3 +277,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
