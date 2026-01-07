@@ -13,16 +13,15 @@ import google.generativeai as genai
 # --- CONFIGURATION ---
 st.set_page_config(page_title="GenAI SOW Agent", layout="wide", page_icon="📝")
 
-# --- FIX FOR METADATA SERVICE TIMEOUT & 504 ERRORS ---
-# Disabling the Google Cloud Auth plugin's metadata service lookup to prevent 503/504 errors
-# and forcing the use of native DNS to stabilize the gRPC connection
+# --- STABILITY FIXES FOR WEB ENVIRONMENTS ---
+# Force REST transport instead of gRPC to prevent connection hangs in browser-based environments
 os.environ["GOOGLE_API_USE_CLIENT_CERTIFICATE"] = "false"
 os.environ["GRPC_DNS_RESOLVER"] = "native"
 
 # Gemini API Initialization
-# The execution environment provides the key at runtime.
-apiKey = "" 
-genai.configure(api_key=apiKey)
+# We prioritize the environment-provided key for the Canvas runner
+apiKey = os.environ.get("GENAI_API_KEY", "") 
+genai.configure(api_key=apiKey, transport='rest')
 
 # --- SESSION STATE INITIALIZATION ---
 if 'sow_data' not in st.session_state:
@@ -51,7 +50,7 @@ if 'sow_data' not in st.session_state:
 def generate_selected_content():
     """
     Generates content only for the sections selected by the user.
-    Uses an iterative approach (one call per section) for maximum reliability.
+    Uses an iterative approach with REST transport for maximum reliability.
     """
     meta = st.session_state.sow_data["metadata"]
     solution = meta["other_solution"] if meta["solution_type"] == "Other (Please specify)" else meta["solution_type"]
@@ -64,65 +63,60 @@ def generate_selected_content():
 
     status_placeholder = st.empty()
     
-    # Prompt helper mapping
     prompt_map = {
-        "2.1 OBJECTIVE": f"Rewrite the following business problem into a formal Statement of Work Objective section: '{raw_input}'. Align it strictly to the '{solution}' solution type.",
-        "2.2 PROJECT SPONSOR(S) / STAKEHOLDER(S) / PROJECT TEAM": "Describe the ideal project team structure including Sponsor, Tech Lead, and SME roles for this project.",
-        "2.3 ASSUMPTIONS & DEPENDENCIES": "List 5 technical assumptions and 3 customer dependencies (e.g. data access, API keys). Use bullets.",
-        "2.4 PoC Success Criteria": "Define 4 measurable KPIs for this PoC (e.g. Accuracy, Latency, Adoption). Use bullets.",
-        "3 SCOPE OF WORK - TECHNICAL PROJECT PLAN": "Detail the technical work plan phases: Discovery, Infrastructure Setup, Development, and Testing/UAT.",
-        "4 SOLUTION ARCHITECTURE / ARCHITECTURAL DIAGRAM": "Describe the high-level AWS architecture components (Bedrock, Lambda, OpenSearch) required for this solution.",
-        "5 RESOURCES & COST ESTIMATES": "Provide a high-level estimate of resource roles needed and potential cloud consumption costs/credits."
+        "2.1 OBJECTIVE": f"Rewrite this business problem into a formal SOW Objective: '{raw_input}'. Focus on {solution}.",
+        "2.2 PROJECT SPONSOR(S) / STAKEHOLDER(S) / PROJECT TEAM": f"Describe the project team roles for a {solution} implementation.",
+        "2.3 ASSUMPTIONS & DEPENDENCIES": f"List 5 technical assumptions and 3 dependencies for {solution}.",
+        "2.4 PoC Success Criteria": f"Define 4 measurable KPIs for a {solution} PoC.",
+        "3 SCOPE OF WORK - TECHNICAL PROJECT PLAN": f"Detail the implementation phases for {solution}.",
+        "4 SOLUTION ARCHITECTURE / ARCHITECTURAL DIAGRAM": f"Describe the AWS architecture components for {solution}.",
+        "5 RESOURCES & COST ESTIMATES": f"Estimate resource roles and cloud costs for {solution}."
     }
 
-    # Iterate through selected sections and generate content for each
     for i, section_key in enumerate(selected):
         status_placeholder.info(f"⏳ AI Agent drafting section ({i+1}/{len(selected)}): {section_key}...")
         
-        system_prompt = "You are a Senior AI Solutions Architect. Write professional, formal, and authoritative SOW content. Do not use conversational filler, greetings, or markdown headers. Ensure the output is ready to be pasted directly into a legal document."
+        system_prompt = "You are a professional SOW Architect. Write formal, concise, and technical content. No intros/outros."
         
         user_prompt = f"""
-        Solution Type: {solution}
-        Industry/Domain: {meta['industry']}
-        Customer: {meta['customer_name']}
+        Solution: {solution}
+        Industry: {meta['industry']}
         Task: {prompt_map[section_key]}
         """
 
-        # Increased retries and backoff for better resilience against 504/503 errors
-        max_retries = 5
-        retry_delays = [2, 4, 8, 16, 32]
+        max_retries = 3
+        retry_delays = [2, 5, 10]
         
         for attempt in range(max_retries):
             try:
-                # Re-initializing the model inside the loop ensures fresh configuration per request
+                # Use a specific model version and ensure REST is enabled
                 model = genai.GenerativeModel(
-                    model_name="gemini-2.5-flash-preview-09-2025",
-                    system_instruction=system_prompt
+                    model_name="gemini-2.5-flash-preview-09-2025"
                 )
                 
-                # Increased timeout significantly to handle environment latency
+                # Higher timeout and direct text generation (no JSON mode for higher reliability)
                 response = model.generate_content(
-                    user_prompt,
+                    f"System: {system_prompt}\n\nUser: {user_prompt}",
                     generation_config=genai.types.GenerationConfig(
-                        temperature=0.3,
-                        max_output_tokens=1500,
+                        temperature=0.2,
+                        max_output_tokens=1024,
                     ),
                     request_options={"timeout": 120} 
                 )
                 
-                if response and response.text:
+                if response and hasattr(response, 'text') and response.text:
                     st.session_state.sow_data["sections"][section_key] = response.text.strip()
                     break
                 else:
-                    raise Exception("Empty response from model.")
+                    raise Exception("Incomplete model output.")
             except Exception as e:
                 if attempt < max_retries - 1:
-                    status_placeholder.warning(f"Re-attempting {section_key} (Attempt {attempt+2}/{max_retries})...")
+                    status_placeholder.warning(f"Retrying {section_key} (Attempt {attempt+2}/{max_retries})...")
                     time.sleep(retry_delays[attempt])
                 else:
-                    st.error(f"Failed to generate {section_key}: {str(e)}")
+                    st.error(f"Failed {section_key}: AI service is busy. Please try again.")
 
-    status_placeholder.success("✅ Drafting complete! Review your sections below.")
+    status_placeholder.success("✅ Content ready! Review your sections below.")
     time.sleep(1)
     status_placeholder.empty()
     return True
@@ -178,13 +172,11 @@ def main():
         st.session_state.sow_data["metadata"]["industry"] = st.selectbox("Industry", ["Financial Services", "Retail", "Healthcare", "Manufacturing", "Legal", "Public Sector"])
         
         st.divider()
-        
-        # --- BUSINESS OBJECTIVE INPUT ---
         st.write("### 2. Project Overview Inputs")
         st.session_state.sow_data["metadata"]["raw_objective_input"] = st.text_area(
             "What business problem is the customer solving?", 
-            placeholder="Example: Reduce manual effort, improve accuracy, enable faster decision-making, improve conversion, etc.",
-            help="This input will be refined by the LLM into the formal '2.1 OBJECTIVE' section."
+            placeholder="e.g., Reduce manual effort, improve accuracy...",
+            help="This will be refined into formal SOW text."
         )
 
         st.divider()
@@ -212,7 +204,6 @@ def main():
     st.title("📄 GenAI SOW Architect")
     st.markdown("Automate professional enterprise SOW creation with AI agents.")
 
-    # Simplified Tab Names
     tabs = st.tabs(["Project Overview", "Technical Execution", "Financials"])
 
     with tabs[0]:
