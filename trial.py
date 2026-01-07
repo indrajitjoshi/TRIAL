@@ -2,20 +2,24 @@ import streamlit as st
 import json
 import io
 import time
-import requests
+import os
 from datetime import datetime
 from docx import Document
 from docx.shared import Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+import google.generativeai as genai
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="GenAI SOW Agent", layout="wide", page_icon="📝")
 
-# --- DIRECT API BRIDGE CONFIGURATION ---
-# We use direct HTTP requests to bypass SDK initialization overhead and gRPC hangs.
-API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent"
+# --- ENVIRONMENT STABILITY FIXES ---
+# Force REST transport to avoid gRPC handshake hangs in the browser environment
+os.environ["GOOGLE_API_USE_CLIENT_CERTIFICATE"] = "false"
+os.environ["GRPC_DNS_RESOLVER"] = "native"
+
 # apiKey is provided by the execution environment at runtime.
 apiKey = "" 
+genai.configure(api_key=apiKey, transport='rest')
 
 # --- SESSION STATE INITIALIZATION ---
 if 'sow_data' not in st.session_state:
@@ -39,55 +43,12 @@ if 'sow_data' not in st.session_state:
         }
     }
 
-# --- LLM DIRECT CALL ENGINE ---
-
-def call_gemini_direct(system_instruction, user_prompt):
-    """
-    Direct HTTP bridge to Gemini API. 
-    Bypasses SDK metadata lookups and stabilizing connectivity.
-    """
-    headers = {'Content-Type': 'application/json'}
-    payload = {
-        "contents": [{
-            "parts": [{"text": f"System: {system_instruction}\n\nUser: {user_prompt}"}]
-        }],
-        "generationConfig": {
-            "temperature": 0.3,
-            "maxOutputTokens": 1500,
-            "topP": 0.8,
-            "topK": 40
-        }
-    }
-    
-    # Exponential Backoff Implementation
-    max_retries = 5
-    for attempt in range(max_retries):
-        try:
-            response = requests.post(
-                f"{API_URL}?key={apiKey}",
-                headers=headers,
-                json=payload,
-                timeout=90
-            )
-            
-            if response.status_code == 200:
-                result = response.json()
-                return result['candidates'][0]['content']['parts'][0]['text']
-            elif response.status_code == 429:
-                time.sleep(2 ** attempt)
-            elif response.status_code == 504 or response.status_code == 503:
-                time.sleep(2 ** attempt)
-            else:
-                return f"Error: Received status {response.status_code} from API."
-        except Exception as e:
-            if attempt == max_retries - 1:
-                return f"Connection Error: {str(e)}"
-            time.sleep(2 ** attempt)
-    return "API Timeout after multiple retries."
+# --- LLM ENGINE ---
 
 def generate_selected_content():
     """
-    Iterative drafting engine. Processes sections one-by-one for stability.
+    Iterative drafting engine. Uses the official SDK with REST transport.
+    Processes sections one-by-one for maximum reliability.
     """
     meta = st.session_state.sow_data["metadata"]
     solution = meta["other_solution"] if meta["solution_type"] == "Other (Please specify)" else meta["solution_type"]
@@ -110,20 +71,50 @@ def generate_selected_content():
         "5 RESOURCES & COST ESTIMATES": f"Estimate resource roles (Data Engineer, ML Ops, etc.) and cloud cost factors for {solution}."
     }
 
+    # Model configuration
+    model = genai.GenerativeModel(
+        model_name="gemini-2.5-flash-preview-09-2025",
+        system_instruction="You are a professional SOW Architect. Write formal, concise, and technical document content. No greetings or intros."
+    )
+
     for i, section_key in enumerate(selected):
         status_placeholder.info(f"⏳ Section ({i+1}/{len(selected)}): {section_key} is being drafted...")
         
-        system_msg = "You are a professional SOW Architect. Write formal, concise, and technical document content. No greetings."
         user_msg = f"Industry: {meta['industry']}\nSolution: {solution}\nTask: {prompt_map[section_key]}"
         
-        result = call_gemini_direct(system_msg, user_msg)
-        
-        if "Error" not in result:
-            st.session_state.sow_data["sections"][section_key] = result.strip()
-        else:
-            st.error(f"Failed to draft {section_key}. {result}")
+        # Exponential Backoff Implementation
+        max_retries = 3
+        retry_delays = [2, 4, 8]
+        success = False
 
-    status_placeholder.success("✅ Drafting complete! Please review below.")
+        for attempt in range(max_retries):
+            try:
+                response = model.generate_content(
+                    user_msg,
+                    generation_config=genai.types.GenerationConfig(
+                        temperature=0.2,
+                        max_output_tokens=1024,
+                    ),
+                    request_options={"timeout": 90}
+                )
+                
+                if response and response.text:
+                    st.session_state.sow_data["sections"][section_key] = response.text.strip()
+                    success = True
+                    break
+                else:
+                    raise Exception("Model returned empty text.")
+                    
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    status_placeholder.warning(f"⚠️ {section_key} failed. Retrying (Attempt {attempt+2}/3)...")
+                    time.sleep(retry_delays[attempt])
+                else:
+                    st.error(f"❌ Failed to draft {section_key} after 3 attempts.")
+                    if "apiKey" in str(e) or "403" in str(e):
+                        st.warning("Auth Error: The API key might not be initialized yet. Try refreshing.")
+
+    status_placeholder.success("✅ Drafting complete! Review your sections below.")
     time.sleep(1)
     status_placeholder.empty()
     return True
