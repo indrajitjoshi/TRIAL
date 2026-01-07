@@ -47,12 +47,12 @@ if 'sow_data' not in st.session_state:
 # --- LLM UTILS ---
 
 def fast_generate_sow():
-    """Generates all SOW sections in a single structured call to avoid multiple round-trip delays."""
+    """Generates all SOW sections in a single structured call with increased timeout to handle 504 errors."""
     meta = st.session_state.sow_data["metadata"]
     context = f"Solution: {meta['solution_type']}, Industry: {meta['industry']}, Type: {meta['engagement_type']}"
     
     status_text = st.empty()
-    status_text.warning("⚡ AI is drafting the entire SOW... Please wait (est. 10-15 seconds).")
+    status_text.warning("⚡ AI is drafting the entire SOW... Please wait (est. 15-20 seconds).")
     
     system_prompt = """
     You are a senior AI Solutions Architect. Generate a professional Statement of Work.
@@ -77,12 +77,14 @@ def fast_generate_sow():
             system_instruction=system_prompt
         )
         
+        # Adding request_options to increase the timeout to 60 seconds to avoid 504 Gateway/Deadline issues
         response = model.generate_content(
             user_prompt,
             generation_config=genai.types.GenerationConfig(
                 temperature=0.3,
                 response_mime_type="application/json"
-            )
+            ),
+            request_options={"timeout": 60}
         )
         
         if response and response.candidates:
@@ -105,11 +107,15 @@ def fast_generate_sow():
             status_text.empty()
             return True
         else:
-            status_text.error("AI returned an empty response.")
+            status_text.error("AI returned an empty response. Please try again.")
             return False
             
     except Exception as e:
-        status_text.error(f"Generation failed: {str(e)}")
+        error_msg = str(e)
+        if "504" in error_msg or "Deadline Exceeded" in error_msg:
+            status_text.error("⌛ The request timed out (504). The AI model is taking longer than expected. Please try clicking 'Auto-Generate' again.")
+        else:
+            status_text.error(f"Generation failed: {error_msg}")
         return False
 
 # --- EXPORT UTILS ---
