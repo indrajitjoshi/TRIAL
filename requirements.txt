@@ -1,0 +1,7 @@
+streamlit
+boto3
+google-generativeai
+python-docx
+pandas
+fpdf
+python-dotenv
