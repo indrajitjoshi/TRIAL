@@ -48,7 +48,7 @@ if 'sow_data' not in st.session_state:
 
 def call_gemini(prompt, system_instruction):
     """Executes a targeted LLM call for a specific SOW section with exponential backoff."""
-    max_retries = 5
+    max_retries = 3
     for i in range(max_retries):
         try:
             model = genai.GenerativeModel(
@@ -60,20 +60,26 @@ def call_gemini(prompt, system_instruction):
                 prompt,
                 generation_config=genai.types.GenerationConfig(
                     temperature=0.3,
-                    max_output_tokens=1000
+                    max_output_tokens=1500
                 )
             )
             if response and response.candidates:
                 text = response.candidates[0].content.parts[0].text
-                if text:
+                if text and len(text.strip()) > 0:
                     return text.strip()
-            raise Exception("Empty or invalid response from API")
+            
+            # If we get here, something was empty
+            if i < max_retries - 1:
+                time.sleep(2)
+                continue
+            return "Error: Received empty response from the AI model."
+            
         except Exception as e:
             if i == max_retries - 1:
-                return f"Error generating section after {max_retries} attempts: {str(e)}"
-            # Exponential backoff: 1s, 2s, 4s, 8s, 16s
-            time.sleep(2**i)
-    return "Generation failed."
+                return f"Error after {max_retries} attempts: {str(e)}"
+            # Exponential backoff: 2s, 4s, 8s
+            time.sleep(2**(i+1))
+    return "Generation failed due to connection issues."
 
 def auto_generate_sow():
     """Triggers the LLM to populate all editable fields based on metadata."""
@@ -86,56 +92,62 @@ def auto_generate_sow():
 
     try:
         # 1. Project Objective
-        status_text.text("Drafting Project Objective...")
-        st.session_state.sow_data["sections"]["objective"] = call_gemini(
+        status_text.warning("Drafting Project Objective... (Step 1/5)")
+        res_obj = call_gemini(
             f"Draft a professional business objective for {context}.",
             "You are a senior IT consultant. Write a 2-paragraph objective focusing on business value. No marketing language."
         )
+        st.session_state.sow_data["sections"]["objective"] = res_obj
         progress_bar.progress(20)
 
         # 2. Assumptions & Dependencies
-        status_text.text("Expanding Assumptions...")
-        st.session_state.sow_data["sections"]["assumptions"] = call_gemini(
+        status_text.warning("Expanding Assumptions... (Step 2/5)")
+        res_ass = call_gemini(
             f"List 5 technical assumptions and 3 customer dependencies for {context}.",
             "Format as a professional bulleted list for a legal SOW. Do not include introductory text."
         )
+        st.session_state.sow_data["sections"]["assumptions"] = res_ass
         progress_bar.progress(40)
 
         # 3. Success Criteria
-        status_text.text("Defining Success Criteria...")
-        st.session_state.sow_data["sections"]["success_criteria"] = call_gemini(
+        status_text.warning("Defining Success Criteria... (Step 3/5)")
+        res_succ = call_gemini(
             f"Define 4 measurable KPIs for success in this {meta['solution_type']} project.",
             "Focus on metrics like Latency, Accuracy, and User Adoption. Use a bulleted list."
         )
+        st.session_state.sow_data["sections"]["success_criteria"] = res_succ
         progress_bar.progress(60)
 
         # 4. Technical Scope (Infra/Workflows)
-        status_text.text("Structuring Technical Infrastructure...")
-        st.session_state.sow_data["sections"]["infra_setup"] = call_gemini(
+        status_text.warning("Structuring Technical Infrastructure... (Step 4/5)")
+        res_infra = call_gemini(
             f"Detail the Infrastructure Setup requirements for a {meta['solution_type']} on AWS.",
             "Describe VPC, compute (Lambda/ECS), and LLM endpoint (Bedrock) requirements professionally."
         )
+        st.session_state.sow_data["sections"]["infra_setup"] = res_infra
         progress_bar.progress(80)
 
         # 5. Core Workflows & Backend
-        status_text.text("Finalizing Core Workflows...")
-        st.session_state.sow_data["sections"]["core_workflows"] = call_gemini(
+        status_text.warning("Finalizing Core Workflows... (Step 5/5)")
+        res_flow = call_gemini(
             f"Describe the core logical workflows for {context}, specifically RAG or Agentic flows.",
             "Write a professional description of the data flow and orchestration logic."
         )
+        st.session_state.sow_data["sections"]["core_workflows"] = res_flow
         
         # Pre-filling static components for reliability
         st.session_state.sow_data["sections"]["backend_components"] = f"Integration with {meta['industry']}-specific data sources, vector database (OpenSearch/Pinecone), and identity management systems."
         st.session_state.sow_data["sections"]["testing_feedback"] = "Execution of comprehensive UAT, prompt engineering optimization cycles, and performance benchmarking against latency targets."
         
         progress_bar.progress(100)
-        status_text.text("SOW Draft Completed.")
-        time.sleep(1)
+        status_text.success("SOW Draft Completed Successfully.")
+        time.sleep(1.5)
         status_text.empty()
         progress_bar.empty()
         
     except Exception as e:
-        st.error(f"An unexpected error occurred during generation: {e}")
+        status_text.error(f"Generation interrupted: {str(e)}")
+        st.error(f"Detailed Error: {e}")
 
 # --- EXPORT UTILS ---
 
@@ -211,7 +223,7 @@ def main():
         st.divider()
         if st.button("🪄 Auto-Generate All Content", type="primary", use_container_width=True):
             auto_generate_sow()
-            st.rerun() # Ensure the main UI refreshes with new state
+            st.rerun() # Force immediate UI sync
 
     st.title("📄 GenAI SOW Architect")
     st.info("Edit any field below. Click 'Auto-Generate' in the sidebar to populate content using Gemini Pro.")
