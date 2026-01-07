@@ -7,19 +7,24 @@ from datetime import datetime
 from docx import Document
 from docx.shared import Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-import google.generativeai as genai
+from transformers import pipeline
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="GenAI SOW Agent", layout="wide", page_icon="📝")
 
-# --- ENVIRONMENT STABILITY FIXES ---
-# Force REST transport to avoid gRPC handshake hangs in the browser environment
-os.environ["GOOGLE_API_USE_CLIENT_CERTIFICATE"] = "false"
-os.environ["GRPC_DNS_RESOLVER"] = "native"
+# --- LLM ENGINE INITIALIZATION ---
+# Using the requested Hugging Face model: GLM-4.7
+@st.cache_resource
+def load_llm():
+    try:
+        # Initializing the pipeline for text generation
+        pipe = pipeline("text-generation", model="zai-org/GLM-4.7", device_map="auto")
+        return pipe
+    except Exception as e:
+        st.error(f"Failed to load Hugging Face model: {e}")
+        return None
 
-# apiKey is provided by the execution environment at runtime.
-apiKey = "" 
-genai.configure(api_key=apiKey, transport='rest')
+llm_pipeline = load_llm()
 
 # --- SESSION STATE INITIALIZATION ---
 if 'sow_data' not in st.session_state:
@@ -43,13 +48,17 @@ if 'sow_data' not in st.session_state:
         }
     }
 
-# --- LLM ENGINE ---
+# --- GENERATION ENGINE ---
 
 def generate_selected_content():
     """
-    Iterative drafting engine. Uses the official SDK with REST transport.
-    Processes sections one-by-one for maximum reliability.
+    Iterative drafting engine using GLM-4 Hugging Face pipeline.
+    Processes sections one-by-one to ensure stability.
     """
+    if llm_pipeline is None:
+        st.error("AI Model pipeline is not initialized. Please check backend logs.")
+        return False
+
     meta = st.session_state.sow_data["metadata"]
     solution = meta["other_solution"] if meta["solution_type"] == "Other (Please specify)" else meta["solution_type"]
     selected = meta["selected_sections"]
@@ -62,7 +71,7 @@ def generate_selected_content():
     status_placeholder = st.empty()
     
     prompt_map = {
-        "2.1 OBJECTIVE": f"Rewrite this business problem into a formal SOW Objective: '{raw_input}'. Solution context: {solution}.",
+        "2.1 OBJECTIVE": f"Rewrite this business problem into a formal SOW Objective: '{raw_input}'. Solution context: {solution}. Professional tone.",
         "2.2 PROJECT SPONSOR(S) / STAKEHOLDER(S) / PROJECT TEAM": f"Describe the project team structure and roles required for a {solution} implementation.",
         "2.3 ASSUMPTIONS & DEPENDENCIES": f"List 5 specific technical assumptions and 3 critical customer dependencies for {solution}.",
         "2.4 PoC Success Criteria": f"Define 4 measurable and realistic KPIs for a {solution} PoC.",
@@ -71,48 +80,28 @@ def generate_selected_content():
         "5 RESOURCES & COST ESTIMATES": f"Estimate resource roles (Data Engineer, ML Ops, etc.) and cloud cost factors for {solution}."
     }
 
-    # Model configuration
-    model = genai.GenerativeModel(
-        model_name="gemini-2.5-flash-preview-09-2025",
-        system_instruction="You are a professional SOW Architect. Write formal, concise, and technical document content. No greetings or intros."
-    )
-
     for i, section_key in enumerate(selected):
         status_placeholder.info(f"⏳ Section ({i+1}/{len(selected)}): {section_key} is being drafted...")
         
-        user_msg = f"Industry: {meta['industry']}\nSolution: {solution}\nTask: {prompt_map[section_key]}"
+        # Constructing message for GLM-4
+        messages = [
+            {"role": "system", "content": "You are a professional SOW Architect. Write formal, concise, and technical document content. No greetings or intros."},
+            {"role": "user", "content": f"Industry: {meta['industry']}\nSolution: {solution}\nTask: {prompt_map[section_key]}"}
+        ]
         
-        # Exponential Backoff Implementation
-        max_retries = 3
-        retry_delays = [2, 4, 8]
-        success = False
-
-        for attempt in range(max_retries):
-            try:
-                response = model.generate_content(
-                    user_msg,
-                    generation_config=genai.types.GenerationConfig(
-                        temperature=0.2,
-                        max_output_tokens=1024,
-                    ),
-                    request_options={"timeout": 90}
-                )
+        try:
+            # Invoking the pipeline
+            result = llm_pipeline(messages, max_new_tokens=1024, do_sample=True, temperature=0.3)
+            # Extracting the generated text
+            generated_text = result[0]['generated_text'][-1]['content']
+            
+            if generated_text:
+                st.session_state.sow_data["sections"][section_key] = generated_text.strip()
+            else:
+                raise Exception("Model returned empty text.")
                 
-                if response and response.text:
-                    st.session_state.sow_data["sections"][section_key] = response.text.strip()
-                    success = True
-                    break
-                else:
-                    raise Exception("Model returned empty text.")
-                    
-            except Exception as e:
-                if attempt < max_retries - 1:
-                    status_placeholder.warning(f"⚠️ {section_key} failed. Retrying (Attempt {attempt+2}/3)...")
-                    time.sleep(retry_delays[attempt])
-                else:
-                    st.error(f"❌ Failed to draft {section_key} after 3 attempts.")
-                    if "apiKey" in str(e) or "403" in str(e):
-                        st.warning("Auth Error: The API key might not be initialized yet. Try refreshing.")
+        except Exception as e:
+            st.error(f"❌ Failed to draft {section_key}. Error: {str(e)}")
 
     status_placeholder.success("✅ Drafting complete! Review your sections below.")
     time.sleep(1)
@@ -200,7 +189,7 @@ def main():
                 st.rerun()
 
     st.title("📄 AI Statement of Work Architect")
-    st.markdown("Automate enterprise-grade SOW drafting with GenAI.")
+    st.markdown("Automate enterprise-grade SOW drafting with GLM-4.")
 
     tabs = st.tabs(["Project Overview", "Technical Plan", "Financials & Export"])
 
