@@ -123,83 +123,135 @@ with tabs[0]:
         customer_name = st.text_input("Customer Name", "Acme Global")
 
     st.divider()
-    if st.button("✨ GENERATE COMPLETE SOW DRAFT (LLM AUTOFILL)", use_container_width=True, type="primary"):
-        sow_schema = {
-            "type": "OBJECT",
-            "properties": {
-                "objective": {"type": "STRING"},
-                "outcomes": {"type": "ARRAY", "items": {"type": "STRING"}},
-                "stakeholders": {
-                    "type": "ARRAY",
-                    "items": {
-                        "type": "OBJECT",
-                        "properties": {
-                            "role": {"type": "STRING"},
-                            "name": {"type": "STRING"},
-                            "title": {"type": "STRING"},
-                            "email": {"type": "STRING"}
-                        }
-                    }
-                },
-                "dependencies": {"type": "STRING"},
-                "data_characteristics": {
-                    "type": "ARRAY",
-                    "items": {
-                        "type": "OBJECT",
-                        "properties": {
-                            "type": {"type": "STRING"},
-                            "size": {"type": "STRING"},
-                            "format": {"type": "STRING"},
-                            "volume": {"type": "STRING"}
-                        }
-                    }
-                },
-                "success_criteria": {"type": "STRING"},
-                "technical_scope": {"type": "STRING"},
-                "architecture": {
-                    "type": "OBJECT",
-                    "properties": {
-                        "compute": {"type": "STRING"},
-                        "storage": {"type": "ARRAY", "items": {"type": "STRING"}},
-                        "ml_services": {"type": "ARRAY", "items": {"type": "STRING"}},
-                        "ui": {"type": "STRING"}
-                    }
-                },
-                "timeline": {
-                    "type": "ARRAY",
-                    "items": {
-                        "type": "OBJECT",
-                        "properties": {
-                            "phase": {"type": "STRING"},
-                            "weeks": {"type": "STRING"}
-                        }
-                    }
-                },
-                "usage_users": {"type": "NUMBER"},
-                "usage_requests": {"type": "NUMBER"}
+    if st.button("✨ GENERATE COMPLETE SOW DRAFT (SECTION-BY-SECTION)", use_container_width=True, type="primary"):
+        # Initialize dictionary to hold all parts
+        generated_sow = {}
+        
+        # Progress status bar
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        try:
+            # 1. Objective & Outcomes
+            status_text.text("1/8 Generating Project Objective & Outcomes...")
+            obj_schema = {
+                "type": "OBJECT",
+                "properties": {
+                    "objective": {"type": "STRING"},
+                    "outcomes": {"type": "ARRAY", "items": {"type": "STRING"}}
+                }
             }
-        }
-        
-        prompt = f"""Generate a complete, professional SOW dataset for building a '{sol_type}' solution for a '{industry}' client named '{customer_name}'. 
-        The engagement type is a '{engagement}'.
-        - Objective: Formal and business-aligned.
-        - Outcomes: 4-5 strategic goals.
-        - Stakeholders: Generate 4 realistic placeholder stakeholders (Partner Exec, Customer Exec, AWS Exec, Escalation).
-        - Dependencies: Formal bulleted list of 6-8 critical data/env needs.
-        - Data: Realistic metrics for relevant data types (e.g. text for LLMs, images for CV).
-        - Success Criteria: Specific metrics like '90% accuracy', '<2s latency'.
-        - Technical Scope: Detailed breakdown of tasks (Ingestion, Inference, App dev).
-        - Architecture: Choose best AWS services.
-        - Timeline: Logical week mapping for {engagement}."""
-        
-        with st.spinner("GenAI is architecting your SOW..."):
-            result = call_gemini_json(prompt, sow_schema)
-            if result:
-                st.session_state.autofill_data = result
-                st.session_state.autofill_done = True
-                st.toast("Success! Entire SOW Draft Generated.")
-            else:
-                st.error("Failed to generate content. The API might be under heavy load.")
+            res = call_gemini_json(f"Generate a professional business objective and 4 strategic outcomes for a '{sol_type}' solution for '{customer_name}' in the '{industry}' industry. Engagement: {engagement}.", obj_schema)
+            if res: generated_sow.update(res)
+            progress_bar.progress(12)
+
+            # 2. Stakeholders
+            status_text.text("2/8 Generating Stakeholder information...")
+            stk_schema = {
+                "type": "OBJECT",
+                "properties": {
+                    "stakeholders": {
+                        "type": "ARRAY",
+                        "items": {
+                            "type": "OBJECT",
+                            "properties": {
+                                "role": {"type": "STRING"},
+                                "name": {"type": "STRING"},
+                                "title": {"type": "STRING"},
+                                "email": {"type": "STRING"}
+                            }
+                        }
+                    }
+                }
+            }
+            res = call_gemini_json(f"Generate 4 placeholder stakeholders for a {sol_type} project at {customer_name}. Include roles for Partner, Customer, and AWS.", stk_schema)
+            if res: generated_sow.update(res)
+            progress_bar.progress(25)
+
+            # 3. Dependencies
+            status_text.text("3/8 Generating Dependencies...")
+            deps = call_gemini_text(f"List 6-8 critical customer dependencies (data access, AWS environment, SMEs) for a '{sol_type}' {engagement} at '{customer_name}'.")
+            generated_sow["dependencies"] = deps
+            progress_bar.progress(37)
+
+            # 4. Data Characteristics
+            status_text.text("4/8 Analyzing Data Characteristics...")
+            data_schema = {
+                "type": "OBJECT",
+                "properties": {
+                    "data_characteristics": {
+                        "type": "ARRAY",
+                        "items": {
+                            "type": "OBJECT",
+                            "properties": {
+                                "type": {"type": "STRING"},
+                                "size": {"type": "STRING"},
+                                "format": {"type": "STRING"},
+                                "volume": {"type": "STRING"}
+                            }
+                        }
+                    }
+                }
+            }
+            res = call_gemini_json(f"Identify 2-3 realistic data types and volumes required for a '{sol_type}' implementation in the '{industry}' sector.", data_schema)
+            if res: generated_sow.update(res)
+            progress_bar.progress(50)
+
+            # 5. Success Criteria
+            status_text.text("5/8 Defining Success Criteria...")
+            success = call_gemini_text(f"Provide 5 measurable success criteria for a '{sol_type}' POC. Use metrics like accuracy, latency, and user adoption.")
+            generated_sow["success_criteria"] = success
+            progress_bar.progress(62)
+
+            # 6. Technical Scope
+            status_text.text("6/8 Architecting Technical Scope...")
+            scope = call_gemini_text(f"Write a comprehensive technical scope of work for a '{sol_type}' project. Include ingestion, model/agent configuration, and UI development.")
+            generated_sow["technical_scope"] = scope
+            progress_bar.progress(75)
+
+            # 7. Architecture
+            status_text.text("7/8 Selecting AWS Services...")
+            arch_schema = {
+                "type": "OBJECT",
+                "properties": {
+                    "architecture": {
+                        "type": "OBJECT",
+                        "properties": {
+                            "compute": {"type": "STRING"},
+                            "storage": {"type": "ARRAY", "items": {"type": "STRING"}},
+                            "ml_services": {"type": "ARRAY", "items": {"type": "STRING"}},
+                            "ui": {"type": "STRING"}
+                        }
+                    }
+                }
+            }
+            res = call_gemini_json(f"Design an AWS architecture for '{sol_type}'. Suggest compute, storage, Bedrock/SageMaker services, and UI layer.", arch_schema)
+            if res: generated_sow.update(res)
+            progress_bar.progress(87)
+
+            # 8. Timeline & Costs
+            status_text.text("8/8 Finalizing Timeline & Usage metrics...")
+            time_schema = {
+                "type": "OBJECT",
+                "properties": {
+                    "timeline": {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {"phase": {"type": "STRING"}, "weeks": {"type": "STRING"}}}},
+                    "usage_users": {"type": "NUMBER"},
+                    "usage_requests": {"type": "NUMBER"}
+                }
+            }
+            res = call_gemini_json(f"Create a high-level timeline and usage estimate (daily users/requests) for a '{engagement}' of a '{sol_type}'.", time_schema)
+            if res: generated_sow.update(res)
+            progress_bar.progress(100)
+            
+            # Finalize
+            st.session_state.autofill_data = generated_sow
+            st.session_state.autofill_done = True
+            status_text.success("Complete SOW Draft Generated Successfully!")
+            st.toast("Check all tabs to review and edit the content.")
+
+        except Exception as e:
+            st.error(f"An error occurred during part-by-part generation: {str(e)}")
+            status_text.text("Generation paused due to an error.")
 
 # --- TAB 2: PROJECT OVERVIEW ---
 with tabs[1]:
@@ -270,12 +322,12 @@ with tabs[3]:
     col_arch1, col_arch2 = st.columns(2)
     with col_arch1:
         comp_val = arch.get("compute", "AWS Lambda + Step Functions")
-        compute = st.selectbox("Compute", ["AWS Lambda + Step Functions", "ECS / EKS", "Hybrid"], index=0 if "Lambda" in comp_val else 1)
+        compute = st.selectbox("Compute", ["AWS Lambda + Step Functions", "ECS / EKS", "Hybrid"], index=0 if "Lambda" in str(comp_val) else 1)
         storage = st.multiselect("Storage & Search", ["Amazon S3", "DynamoDB", "OpenSearch", "RDS", "Vector DB (Aurora PG)"], default=arch.get("storage", ["Amazon S3"]))
     with col_arch2:
         ml_services = st.multiselect("GenAI / ML Services", AWS_ML_SERVICES, default=arch.get("ml_services", ["Amazon Bedrock"]))
         ui_val = arch.get("ui", "Streamlit on S3")
-        ui_layer = st.selectbox("UI Layer", ["Streamlit on S3", "CloudFront + Static UI", "Internal demo only", "No UI (API only)"], index=0 if "Streamlit" in ui_val else 1)
+        ui_layer = st.selectbox("UI Layer", ["Streamlit on S3", "CloudFront + Static UI", "Internal demo only", "No UI (API only)"], index=0 if "Streamlit" in str(ui_val) else 1)
 
 # --- TAB 5: TIMELINE & COSTS ---
 with tabs[4]:
@@ -368,4 +420,4 @@ with tabs[5]:
 
 st.sidebar.markdown(f"**Current Solution:**\n{sol_type}")
 st.sidebar.markdown(f"**Target Industry:**\n{industry}")
-st.sidebar.info("Use Tab 1 'Autofill' for a full baseline, then edit individual sections as needed.")
+st.sidebar.info("Generation logic has been updated to part-by-part for higher reliability.")
