@@ -14,24 +14,31 @@ st.set_page_config(
 )
 
 # -------------------------------------------------
-# LOAD LLM (STREAMLIT CLOUD SAFE)
+# LOAD LLM (BETTER MODEL)
 # -------------------------------------------------
 @st.cache_resource
 def load_llm():
     return pipeline(
-        "text2text-generation",
-        model="google/flan-t5-base",
+        "text-generation",
+        model="TinyLlama/TinyLlama-1.1B-Chat-v1.0",
         device="cpu"
     )
 
 llm = load_llm()
 
 def call_llm(prompt):
-    out = llm(prompt, max_new_tokens=300, temperature=0.3)
-    return out[0]["generated_text"].strip()
+    response = llm(
+        prompt,
+        max_new_tokens=400,
+        temperature=0.4,
+        do_sample=True
+    )[0]["generated_text"]
+
+    # Remove prompt echo
+    return response.replace(prompt, "").strip()
 
 # -------------------------------------------------
-# SESSION STATE INITIALIZATION
+# SESSION STATE
 # -------------------------------------------------
 def empty_row():
     return {"Name": "", "Title": "", "Email": ""}
@@ -66,119 +73,121 @@ if "sow_data" not in st.session_state:
 # -------------------------------------------------
 # GENERATION ENGINE (FIXED)
 # -------------------------------------------------
-def generate_sow_content():
-    data = st.session_state.sow_data
-    meta = data["metadata"]
-    sec = data["sections"]
+def generate_sow():
+    d = st.session_state.sow_data
+    m = d["metadata"]
+    s = d["sections"]
 
-    solution = meta["other_solution"] if meta["solution_type"] == "Other (Please specify)" else meta["solution_type"]
+    solution = m["other_solution"] if m["solution_type"] == "Other (Please specify)" else m["solution_type"]
 
-    sec["objective"] = call_llm(
-        f"Write a formal SOW Objective for a {solution} Proof of Concept in the {meta['industry']} industry. Business problem: {meta['business_problem']}"
-    )
+    s["objective"] = call_llm(f"""
+Write a formal SOW OBJECTIVE section.
+Context:
+- Industry: {m['industry']}
+- Solution: {solution}
+- Business Problem: {m['business_problem']}
 
-    sec["dependencies"] = call_llm(
-        f"List customer dependencies for a {solution} POC."
-    )
+Rules:
+- 2 short paragraphs
+- No definitions
+- Consulting tone
+""")
 
-    sec["assumptions"] = call_llm(
-        f"List delivery assumptions for a {solution} POC."
-    )
+    s["dependencies"] = call_llm(f"""
+List CUSTOMER DEPENDENCIES for a {solution} POC.
+Rules:
+- Minimum 5 bullet points
+- Technical + business mix
+""")
 
-    sec["success_demo"] = call_llm(
-        f"List demonstration success criteria for a {solution} POC."
-    )
+    s["assumptions"] = call_llm(f"""
+List DELIVERY ASSUMPTIONS for a {solution} POC.
+Rules:
+- Minimum 5 bullet points
+- Enterprise assumptions only
+""")
 
-    sec["success_results"] = call_llm(
-        f"List measurable business outcomes for a {solution} POC."
-    )
+    s["success_demo"] = call_llm(f"""
+Define DEMONSTRATION SUCCESS CRITERIA.
+Rules:
+- Minimum 4 bullet points
+- Measurable outcomes
+""")
 
-    sec["scope"] = call_llm(
-        f"Describe a phase-wise technical scope (Discovery, Build, Test, Demo) for a {solution} POC."
-    )
+    s["success_results"] = call_llm(f"""
+Define EXPECTED BUSINESS RESULTS.
+Rules:
+- Minimum 4 bullet points
+- Business value focused
+""")
 
-    sec["architecture"] = call_llm(
-        f"Describe a high-level GenAI architecture for {solution}."
-    )
+    s["scope"] = call_llm(f"""
+Write TECHNICAL SCOPE OF WORK.
+Rules:
+- Use phases: Discovery, Design, Build, Test, Demo
+- Bullet points per phase
+""")
 
-    sec["commercials"] = call_llm(
-        f"Write a short commercial and resource estimation note for a {solution} POC."
-    )
+    s["architecture"] = call_llm(f"""
+Describe HIGH-LEVEL SOLUTION ARCHITECTURE.
+Rules:
+- Logical flow
+- Cloud-native
+- GenAI components
+""")
 
-# -------------------------------------------------
-# TABLE EDITOR
-# -------------------------------------------------
-def render_table(title, key):
-    st.subheader(title)
-    rows = st.session_state.sow_data["tables"][key]
-
-    for i, row in enumerate(rows):
-        c1, c2, c3 = st.columns(3)
-        row["Name"] = c1.text_input("Name", row["Name"], key=f"{key}_n_{i}")
-        row["Title"] = c2.text_input("Title", row["Title"], key=f"{key}_t_{i}")
-        row["Email"] = c3.text_input("Email / Contact", row["Email"], key=f"{key}_e_{i}")
-
-    if st.button(f"➕ Add {title} Row", key=f"add_{key}"):
-        rows.append(empty_row())
-        st.rerun()
+    s["commercials"] = call_llm(f"""
+Write COMMERCIAL & RESOURCE ESTIMATE NOTES.
+Rules:
+- Roles
+- Duration
+- Cost drivers
+""")
 
 # -------------------------------------------------
 # DOCX EXPORT
 # -------------------------------------------------
-def add_docx_table(doc, title, rows):
+def add_table(doc, title, rows):
     doc.add_heading(title, level=2)
     table = doc.add_table(rows=1, cols=3)
     table.style = "Table Grid"
 
-    hdr = table.rows[0].cells
-    hdr[0].text = "Name"
-    hdr[1].text = "Title"
-    hdr[2].text = "Email / Contact Info"
+    h = table.rows[0].cells
+    h[0].text = "Name"
+    h[1].text = "Title"
+    h[2].text = "Email / Contact"
 
     for r in rows:
         if any(r.values()):
-            cells = table.add_row().cells
-            cells[0].text = r["Name"]
-            cells[1].text = r["Title"]
-            cells[2].text = r["Email"]
+            c = table.add_row().cells
+            c[0].text = r["Name"]
+            c[1].text = r["Title"]
+            c[2].text = r["Email"]
 
 def create_docx(data):
     doc = Document()
     doc.add_heading("Statement of Work (SOW)", 0)
 
-    meta = data["metadata"]
-    sec = data["sections"]
+    m = data["metadata"]
+    s = data["sections"]
 
-    doc.add_paragraph(f"Customer: {meta['customer_name']}")
-    doc.add_paragraph(f"Industry: {meta['industry']}")
-    doc.add_paragraph(f"Solution: {meta['solution_type']}")
+    doc.add_paragraph(f"Customer: {m['customer_name']}")
+    doc.add_paragraph(f"Industry: {m['industry']}")
+    doc.add_paragraph(f"Solution: {m['solution_type']}")
     doc.add_paragraph(f"Date: {datetime.now().strftime('%d %B %Y')}")
 
-    doc.add_heading("2.1 Objective", 1)
-    doc.add_paragraph(sec["objective"])
-
-    doc.add_heading("2.2 Stakeholders", 1)
-    add_docx_table(doc, "Partner Executive Sponsor", data["tables"]["partner"])
-    add_docx_table(doc, "Customer Executive Sponsor", data["tables"]["customer"])
-    add_docx_table(doc, "Cloud Executive Sponsor", data["tables"]["cloud"])
-    add_docx_table(doc, "Escalation Matrix", data["tables"]["escalation"])
-
-    doc.add_heading("2.3 Assumptions & Dependencies", 1)
-    doc.add_paragraph("Dependencies:\n" + sec["dependencies"])
-    doc.add_paragraph("Assumptions:\n" + sec["assumptions"])
-
-    doc.add_heading("2.4 Success Criteria", 1)
-    doc.add_paragraph("Demonstration:\n" + sec["success_demo"])
-    doc.add_paragraph("Results:\n" + sec["success_results"])
-
-    doc.add_heading("3 Scope of Work", 1)
-    doc.add_paragraph(sec["scope"])
-
-    doc.add_heading("4 Solution Architecture", 1)
-    doc.add_paragraph(sec["architecture"])
-
-    doc.add_heading("5 Commercials", 1)
-    doc.add_paragraph(sec["commercials"])
+    for k, title in [
+        ("objective", "2.1 Objective"),
+        ("dependencies", "Dependencies"),
+        ("assumptions", "Assumptions"),
+        ("success_demo", "Success Demonstration"),
+        ("success_results", "Expected Results"),
+        ("scope", "Scope of Work"),
+        ("architecture", "Architecture"),
+        ("commercials", "Commercials")
+    ]:
+        doc.add_heading(title, 1)
+        doc.add_paragraph(s[k])
 
     buf = io.BytesIO()
     doc.save(buf)
@@ -189,88 +198,40 @@ def create_docx(data):
 # UI
 # -------------------------------------------------
 def main():
-    data = st.session_state.sow_data
-    meta = data["metadata"]
-    sec = data["sections"]
+    d = st.session_state.sow_data
+    m = d["metadata"]
+    s = d["sections"]
 
-    st.sidebar.title("🛠️ Inputs")
+    st.sidebar.title("🛠 Inputs")
 
-    meta["customer_name"] = st.sidebar.text_input("Customer Name", meta["customer_name"])
+    m["customer_name"] = st.sidebar.text_input("Customer Name", m["customer_name"])
+    m["industry"] = st.sidebar.text_input("Industry", m["industry"])
+    m["solution_type"] = st.sidebar.text_input("Solution Type", m["solution_type"])
+    m["business_problem"] = st.sidebar.text_area("Business Problem")
 
-    meta["industry"] = st.sidebar.selectbox(
-        "Industry",
-        [
-            "Retail", "Financial Services", "Banking", "Insurance",
-            "Healthcare", "Pharmaceuticals", "Manufacturing",
-            "Automotive", "Telecom", "Energy", "Utilities",
-            "Travel & Hospitality", "Logistics", "E-commerce",
-            "Media & Entertainment", "Legal", "Education", "Public Sector"
-        ]
-    )
-
-    solution_options = [
-        "Multi Agent Store Advisor",
-        "Intelligent Search",
-        "Recommendation",
-        "AI Agents Demand Forecasting",
-        "Banner Audit using LLM",
-        "Image Enhancement",
-        "Virtual Try-On",
-        "Agentic AI L1 Support",
-        "Product Listing Standardization",
-        "AI Agents Based Pricing Module",
-        "Cost, Margin Visibility & Insights using LLM",
-        "AI Trend Simulator",
-        "Virtual Data Analyst (Text to SQL)",
-        "Multilingual Call Analysis",
-        "Customer Review Analysis",
-        "Sales Co-Pilot",
-        "Research Co-Pilot",
-        "Product Copy Generator",
-        "Multi-agent e-KYC & Onboarding",
-        "Document / Report Audit",
-        "RBI Circular Scraping & Insights Bot",
-        "Visual Inspection",
-        "AIoT based CCTV Surveillance",
-        "Multilingual Voice Bot",
-        "SOP Creation",
-        "Other (Please specify)"
-    ]
-
-    meta["solution_type"] = st.sidebar.selectbox("Solution Type", solution_options)
-
-    if meta["solution_type"] == "Other (Please specify)":
-        meta["other_solution"] = st.sidebar.text_input("Specify Solution")
-
-    meta["business_problem"] = st.sidebar.text_area("Business Problem")
-
-    if st.sidebar.button("🪄 Generate SOW Content"):
-        generate_sow_content()
-        st.success("Content generated successfully")
+    if st.sidebar.button("🪄 Generate SOW"):
+        generate_sow()
+        st.success("SOW content generated")
 
     st.title("📄 Editable SOW")
 
-    sec["objective"] = st.text_area("2.1 Objective", sec["objective"], height=150)
-    render_table("Partner Executive Sponsor", "partner")
-    render_table("Customer Executive Sponsor", "customer")
-    render_table("Cloud Executive Sponsor", "cloud")
-    render_table("Escalation Matrix", "escalation")
+    for k, label in [
+        ("objective", "Objective"),
+        ("dependencies", "Dependencies"),
+        ("assumptions", "Assumptions"),
+        ("success_demo", "Success Demonstration"),
+        ("success_results", "Expected Results"),
+        ("scope", "Scope of Work"),
+        ("architecture", "Architecture"),
+        ("commercials", "Commercials")
+    ]:
+        s[k] = st.text_area(label, s[k], height=150)
 
-    sec["dependencies"] = st.text_area("Dependencies", sec["dependencies"], height=120)
-    sec["assumptions"] = st.text_area("Assumptions", sec["assumptions"], height=120)
-    sec["success_demo"] = st.text_area("Success Demonstration", sec["success_demo"], height=120)
-    sec["success_results"] = st.text_area("Expected Results", sec["success_results"], height=120)
-    sec["scope"] = st.text_area("Scope of Work", sec["scope"], height=160)
-    sec["architecture"] = st.text_area("Architecture", sec["architecture"], height=140)
-    sec["commercials"] = st.text_area("Commercials", sec["commercials"], height=120)
-
-    docx = create_docx(data)
     st.download_button(
-        "📥 Download SOW (DOCX)",
-        docx,
-        file_name="Generated_SOW.docx",
-        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        use_container_width=True
+        "📥 Download DOCX",
+        create_docx(d),
+        "Generated_SOW.docx",
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     )
 
 if __name__ == "__main__":
