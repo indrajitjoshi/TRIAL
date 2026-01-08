@@ -54,7 +54,7 @@ def call_gemini(prompt, system_instruction="You are a professional solution arch
                 time.sleep(2**i)
         except Exception:
             time.sleep(2**i)
-    return "Error generating content. Please try again."
+    return "The AI model is currently busy. Please try clicking the button again in a moment."
 
 # --- UI STATE ---
 if "sow_data" not in st.session_state:
@@ -92,6 +92,25 @@ with tabs[0]:
         
         customer_name = st.text_input("Customer Name", "Acme Corp")
 
+    st.divider()
+    if st.button("✨ Autofill Entire SOW with AI", use_container_width=True, type="primary"):
+        with st.spinner(f"Generating comprehensive SOW for {sol_type}..."):
+            # 1. Objective
+            st.session_state.refined_objective = call_gemini(f"Write a formal business objective for a {engagement} for building a {sol_type} for a {industry} client named {customer_name}.")
+            
+            # 2. Success Criteria
+            st.session_state.success_crit = call_gemini(f"Generate 5 measurable success criteria for a {sol_type} POC. Include metrics like accuracy, latency, and business ROI.")
+            
+            # 3. Technical Scope
+            st.session_state.sow_text = call_gemini(f"Write a detailed technical scope of work for building a {sol_type}. Breakdown into Infrastructure, Data Engineering, Model/Agent Development, and UI.")
+            
+            # 4. Dependencies
+            st.session_state.expanded_deps = call_gemini(f"List 6 critical customer dependencies for a {sol_type} project including data access, AWS environment, and SME availability.")
+            
+            # 5. Stakeholder Placeholders
+            st.session_state.autofill_done = True
+            st.toast("SOW sections pre-populated! Check other tabs.")
+
 # --- TAB 2: PROJECT OVERVIEW ---
 with tabs[1]:
     st.header("2. Project Overview")
@@ -99,34 +118,36 @@ with tabs[1]:
     col_obj, col_refined = st.columns([1, 1])
     with col_obj:
         raw_objective = st.text_area("2.1 Business Objective (Input)", placeholder="e.g. Reduce manual effort in audit, improve accuracy, enable faster decisions...")
-        if st.button("Refine with LLM"):
+        if st.button("Refine Objective"):
             with st.spinner("Refining..."):
                 prompt = f"Rewrite this business objective into a formal project objective for a {sol_type} project in the {industry} industry. Input: {raw_objective}"
                 st.session_state.refined_objective = call_gemini(prompt)
     
     with col_refined:
-        final_objective = st.text_area("Refined Objective (Editable)", value=st.session_state.get("refined_objective", ""))
+        final_objective = st.text_area("Refined Objective (Editable)", value=st.session_state.get("refined_objective", ""), height=200)
 
     st.divider()
-    outcomes = st.multiselect("2.2 Key Outcomes Expected", ["Reduce manual effort", "Improve accuracy / quality", "Faster turnaround time", "Cost reduction", "Revenue uplift", "Compliance improvement", "Better customer experience", "Scalability validation"])
+    outcomes = st.multiselect("2.2 Key Outcomes Expected", ["Reduce manual effort", "Improve accuracy / quality", "Faster turnaround time", "Cost reduction", "Revenue uplift", "Compliance improvement", "Better customer experience", "Scalability validation"], default=["Reduce manual effort", "Improve accuracy / quality"])
 
     st.subheader("2.3 Stakeholders Information")
     stakeholder_data = []
-    for role in ["Partner Executive Sponsor", "Customer Executive Sponsor", "AWS Executive Sponsor", "Escalation Contact"]:
+    # Simplified stakeholder entry
+    roles = ["Partner Executive Sponsor", "Customer Executive Sponsor", "AWS Executive Sponsor", "Escalation Contact"]
+    for role in roles:
         st.markdown(f"**{role}**")
         c1, c2, c3 = st.columns(3)
-        name = c1.text_input("Name", key=f"name_{role}")
-        title = c2.text_input("Title", key=f"title_{role}")
-        email = c3.text_input("Email", key=f"email_{role}")
+        name = c1.text_input("Name", key=f"name_{role}", value="TBD" if st.session_state.get("autofill_done") else "")
+        title = c2.text_input("Title", key=f"title_{role}", value="Stakeholder" if st.session_state.get("autofill_done") else "")
+        email = c3.text_input("Email", key=f"email_{role}", value="email@example.com" if st.session_state.get("autofill_done") else "")
         stakeholder_data.append({"Role": role, "Name": name, "Title": title, "Email": email})
 
 # --- TAB 3: DATA & DEPENDENCIES ---
 with tabs[2]:
     st.header("3. Assumptions & Dependencies")
     
-    deps = st.multiselect("3.1 Customer Dependencies", ["Sample data availability", "Historical data availability", "Design / business guidelines finalized", "API access provided", "User access to AWS account", "SME availability for validation", "Network / VPC access", "Security approvals"])
+    deps = st.multiselect("3.1 Customer Dependencies", ["Sample data availability", "Historical data availability", "Design / business guidelines finalized", "API access provided", "User access to AWS account", "SME availability for validation", "Network / VPC access", "Security approvals"], default=["Sample data availability", "User access to AWS account", "SME availability for validation"])
     
-    if st.button("Expand Dependencies"):
+    if st.button("Regenerate Dependencies"):
         with st.spinner("Expanding..."):
             prompt = f"Expand the following list of project dependencies into formal statements for a SOW: {', '.join(deps)}. Ensure they are specific to a {sol_type} implementation."
             st.session_state.expanded_deps = call_gemini(prompt)
@@ -135,23 +156,27 @@ with tabs[2]:
 
     st.divider()
     st.subheader("3.2 Data Characteristics")
-    data_types = st.multiselect("Data Types Involved", ["Images", "Text", "PDFs / Documents", "Audio", "Video", "Structured tables", "APIs / Streams"])
+    data_types = st.multiselect("Data Types Involved", ["Images", "Text", "PDFs / Documents", "Audio", "Video", "Structured tables", "APIs / Streams"], default=["Text", "Structured tables"])
     
     data_details = {}
     for dt in data_types:
         st.markdown(f"**Details for {dt}**")
         c1, c2, c3 = st.columns(3)
-        size = c1.text_input("Avg Size / Payload", key=f"size_{dt}")
-        fmt = c2.text_input("Formats (e.g. PNG, JSON)", key=f"fmt_{dt}")
-        vol = c3.text_input("Approx Daily Volume", key=f"vol_{dt}")
+        # AI Logic for defaults
+        default_size = "10MB" if dt == "Images" else "100KB"
+        default_vol = "1000/day"
+        
+        size = c1.text_input("Avg Size", key=f"size_{dt}", value=default_size if st.session_state.get("autofill_done") else "")
+        fmt = c2.text_input("Formats", key=f"fmt_{dt}", value="Standard" if st.session_state.get("autofill_done") else "")
+        vol = c3.text_input("Approx Volume", key=f"vol_{dt}", value=default_vol if st.session_state.get("autofill_done") else "")
         data_details[dt] = {"size": size, "format": fmt, "volume": vol}
 
 # --- TAB 4: SCOPE & ARCHITECTURE ---
 with tabs[3]:
     st.header("4. PoC Success Criteria")
-    dimensions = st.multiselect("Success Dimensions", SUCCESS_DIMENSIONS, default=["Accuracy", "Usability"])
+    dimensions = st.multiselect("Success Dimensions", SUCCESS_DIMENSIONS, default=["Accuracy", "Usability", "Latency"])
     
-    if st.button("Generate Success Criteria"):
+    if st.button("Regenerate Success Criteria"):
         with st.spinner("Generating..."):
             prompt = f"Generate measurable success criteria for a {sol_type} POC in the {industry} sector based on these dimensions: {', '.join(dimensions)}. Provide specific metrics (e.g., >=85% accuracy)."
             st.session_state.success_crit = call_gemini(prompt)
@@ -160,9 +185,9 @@ with tabs[3]:
 
     st.divider()
     st.header("5. Scope of Work (Technical)")
-    flows = st.multiselect("Functional Flows to Include", ["Upload / Ingestion", "Processing / Inference", "Metadata extraction", "Scoring / Recommendation", "Feedback loop", "UI display"], default=["Upload / Ingestion", "Processing / Inference", "UI display"])
+    flows = st.multiselect("Functional Flows", ["Upload / Ingestion", "Processing / Inference", "Metadata extraction", "Scoring / Recommendation", "Feedback loop", "UI display"], default=["Upload / Ingestion", "Processing / Inference", "UI display"])
     
-    if st.button("Generate SOW Text"):
+    if st.button("Regenerate SOW Text"):
         with st.spinner("Generating..."):
             prompt = f"Convert the following functional steps into a formal Technical Scope of Work section for a {sol_type}: {', '.join(flows)}."
             st.session_state.sow_text = call_gemini(prompt)
@@ -182,12 +207,12 @@ with tabs[3]:
 # --- TAB 5: TIMELINE & COSTS ---
 with tabs[4]:
     st.header("8. Timeline & Phasing")
-    duration = st.selectbox("PoC Duration", ["2 weeks", "4 weeks", "6 weeks", "Custom"])
+    duration = st.selectbox("PoC Duration", ["2 weeks", "4 weeks", "6 weeks", "Custom"], index=1)
     
     phases = ["Infra setup", "Core workflows", "Testing & validation", "Demo & feedback"]
     phase_mapping = {}
     for p in phases:
-        phase_mapping[p] = st.text_input(f"Timeline for {p}", "Week 1-2")
+        phase_mapping[p] = st.text_input(f"Timeline for {p}", value="Wk 1" if p == "Infra setup" else "Wk 2-3")
 
     st.divider()
     st.header("9. Costing & Usage")
@@ -272,4 +297,4 @@ with tabs[5]:
         mime="text/markdown"
     )
 
-st.sidebar.info("Fill out the tabs sequentially. Use the 'Refine/Expand' buttons to leverage GenAI for professional phrasing.")
+st.sidebar.info("Fill out Tab 1 and click 'Autofill' to generate a complete draft instantly.")
