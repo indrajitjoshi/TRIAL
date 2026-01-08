@@ -19,15 +19,19 @@ st.set_page_config(
 @st.cache_resource
 def load_llm():
     return pipeline(
-        task="text2text-generation",
+        "text2text-generation",
         model="google/flan-t5-base",
         device="cpu"
     )
 
-pipe = load_llm()
+llm = load_llm()
+
+def call_llm(prompt):
+    out = llm(prompt, max_new_tokens=300, temperature=0.3)
+    return out[0]["generated_text"].strip()
 
 # -------------------------------------------------
-# INITIAL DATA
+# SESSION STATE INITIALIZATION
 # -------------------------------------------------
 def empty_row():
     return {"Name": "", "Title": "", "Email": ""}
@@ -35,17 +39,11 @@ def empty_row():
 if "sow_data" not in st.session_state:
     st.session_state.sow_data = {
         "metadata": {
-            "customer_name": "Customer Name",
+            "customer_name": "",
             "industry": "Retail",
             "solution_type": "Multi Agent Store Advisor",
             "other_solution": "",
-            "raw_objective": ""
-        },
-        "tables": {
-            "partner": [empty_row()],
-            "customer": [empty_row()],
-            "cloud": [empty_row()],
-            "escalation": [empty_row()]
+            "business_problem": ""
         },
         "sections": {
             "objective": "",
@@ -56,50 +54,71 @@ if "sow_data" not in st.session_state:
             "scope": "",
             "architecture": "",
             "commercials": ""
+        },
+        "tables": {
+            "partner": [empty_row()],
+            "customer": [empty_row()],
+            "cloud": [empty_row()],
+            "escalation": [empty_row()]
         }
     }
 
 # -------------------------------------------------
-# LLM HELPER
+# GENERATION ENGINE (FIXED)
 # -------------------------------------------------
-def call_llm(prompt: str) -> str:
-    result = pipe(prompt, max_new_tokens=300, temperature=0.2)
-    return result[0]["generated_text"].strip()
-
-# -------------------------------------------------
-# GENERATE INITIAL CONTENT
-# -------------------------------------------------
-def generate_sow():
-    meta = st.session_state.sow_data["metadata"]
-    sec = st.session_state.sow_data["sections"]
+def generate_sow_content():
+    data = st.session_state.sow_data
+    meta = data["metadata"]
+    sec = data["sections"]
 
     solution = meta["other_solution"] if meta["solution_type"] == "Other (Please specify)" else meta["solution_type"]
 
     sec["objective"] = call_llm(
-        f"Write a formal 2–3 sentence SOW objective for a {solution} POC in the {meta['industry']} industry."
+        f"Write a formal SOW Objective for a {solution} Proof of Concept in the {meta['industry']} industry. Business problem: {meta['business_problem']}"
     )
-    sec["dependencies"] = call_llm(f"List 2 customer dependencies for a {solution} POC.")
-    sec["assumptions"] = call_llm(f"List 2 delivery assumptions for a {solution} POC.")
-    sec["success_demo"] = call_llm(f"List 3 demonstration capabilities for a {solution} POC.")
-    sec["success_results"] = call_llm(f"List 2 expected outcomes for a {solution} POC.")
-    sec["scope"] = call_llm(f"Describe a 4-phase technical delivery plan with timelines.")
-    sec["architecture"] = call_llm(f"Describe high-level GenAI solution architecture.")
-    sec["commercials"] = call_llm(f"Write a short POC commercial note.")
+
+    sec["dependencies"] = call_llm(
+        f"List customer dependencies for a {solution} POC."
+    )
+
+    sec["assumptions"] = call_llm(
+        f"List delivery assumptions for a {solution} POC."
+    )
+
+    sec["success_demo"] = call_llm(
+        f"List demonstration success criteria for a {solution} POC."
+    )
+
+    sec["success_results"] = call_llm(
+        f"List measurable business outcomes for a {solution} POC."
+    )
+
+    sec["scope"] = call_llm(
+        f"Describe a phase-wise technical scope (Discovery, Build, Test, Demo) for a {solution} POC."
+    )
+
+    sec["architecture"] = call_llm(
+        f"Describe a high-level GenAI architecture for {solution}."
+    )
+
+    sec["commercials"] = call_llm(
+        f"Write a short commercial and resource estimation note for a {solution} POC."
+    )
 
 # -------------------------------------------------
 # TABLE EDITOR
 # -------------------------------------------------
-def editable_table(title, key):
+def render_table(title, key):
     st.subheader(title)
     rows = st.session_state.sow_data["tables"][key]
 
     for i, row in enumerate(rows):
-        cols = st.columns(3)
-        row["Name"] = cols[0].text_input("Name", row["Name"], key=f"{key}_name_{i}")
-        row["Title"] = cols[1].text_input("Title", row["Title"], key=f"{key}_title_{i}")
-        row["Email"] = cols[2].text_input("Email / Contact Info", row["Email"], key=f"{key}_email_{i}")
+        c1, c2, c3 = st.columns(3)
+        row["Name"] = c1.text_input("Name", row["Name"], key=f"{key}_n_{i}")
+        row["Title"] = c2.text_input("Title", row["Title"], key=f"{key}_t_{i}")
+        row["Email"] = c3.text_input("Email / Contact", row["Email"], key=f"{key}_e_{i}")
 
-    if st.button(f"➕ Add row to {title}", key=f"add_{key}"):
+    if st.button(f"➕ Add {title} Row", key=f"add_{key}"):
         rows.append(empty_row())
         st.rerun()
 
@@ -117,47 +136,48 @@ def add_docx_table(doc, title, rows):
     hdr[2].text = "Email / Contact Info"
 
     for r in rows:
-        if r["Name"] or r["Title"] or r["Email"]:
-            row = table.add_row().cells
-            row[0].text = r["Name"]
-            row[1].text = r["Title"]
-            row[2].text = r["Email"]
+        if any(r.values()):
+            cells = table.add_row().cells
+            cells[0].text = r["Name"]
+            cells[1].text = r["Title"]
+            cells[2].text = r["Email"]
 
 def create_docx(data):
     doc = Document()
-    doc.add_heading("Scope of Work (SOW)", 0)
+    doc.add_heading("Statement of Work (SOW)", 0)
 
     meta = data["metadata"]
+    sec = data["sections"]
+
     doc.add_paragraph(f"Customer: {meta['customer_name']}")
+    doc.add_paragraph(f"Industry: {meta['industry']}")
     doc.add_paragraph(f"Solution: {meta['solution_type']}")
     doc.add_paragraph(f"Date: {datetime.now().strftime('%d %B %Y')}")
 
-    sec = data["sections"]
-
-    doc.add_heading("2.1 OBJECTIVE", 1)
+    doc.add_heading("2.1 Objective", 1)
     doc.add_paragraph(sec["objective"])
 
-    doc.add_heading("2.2 PROJECT SPONSORS / STAKEHOLDERS", 1)
+    doc.add_heading("2.2 Stakeholders", 1)
     add_docx_table(doc, "Partner Executive Sponsor", data["tables"]["partner"])
     add_docx_table(doc, "Customer Executive Sponsor", data["tables"]["customer"])
     add_docx_table(doc, "Cloud Executive Sponsor", data["tables"]["cloud"])
-    add_docx_table(doc, "Project Escalation Contacts", data["tables"]["escalation"])
+    add_docx_table(doc, "Escalation Matrix", data["tables"]["escalation"])
 
-    doc.add_heading("2.3 ASSUMPTIONS & DEPENDENCIES", 1)
+    doc.add_heading("2.3 Assumptions & Dependencies", 1)
     doc.add_paragraph("Dependencies:\n" + sec["dependencies"])
     doc.add_paragraph("Assumptions:\n" + sec["assumptions"])
 
-    doc.add_heading("2.4 PROJECT SUCCESS CRITERIA", 1)
-    doc.add_paragraph("Demonstrations:\n" + sec["success_demo"])
+    doc.add_heading("2.4 Success Criteria", 1)
+    doc.add_paragraph("Demonstration:\n" + sec["success_demo"])
     doc.add_paragraph("Results:\n" + sec["success_results"])
 
-    doc.add_heading("3 SCOPE OF WORK - TECHNICAL PROJECT PLAN", 1)
+    doc.add_heading("3 Scope of Work", 1)
     doc.add_paragraph(sec["scope"])
 
-    doc.add_heading("4 SOLUTION ARCHITECTURE / ARCHITECTURAL DIAGRAM", 1)
+    doc.add_heading("4 Solution Architecture", 1)
     doc.add_paragraph(sec["architecture"])
 
-    doc.add_heading("6 RESOURCES & COST ESTIMATES", 1)
+    doc.add_heading("5 Commercials", 1)
     doc.add_paragraph(sec["commercials"])
 
     buf = io.BytesIO()
@@ -169,14 +189,23 @@ def create_docx(data):
 # UI
 # -------------------------------------------------
 def main():
-    meta = st.session_state.sow_data["metadata"]
+    data = st.session_state.sow_data
+    meta = data["metadata"]
+    sec = data["sections"]
 
-    st.sidebar.title("🛠️ SOW Inputs")
+    st.sidebar.title("🛠️ Inputs")
 
     meta["customer_name"] = st.sidebar.text_input("Customer Name", meta["customer_name"])
+
     meta["industry"] = st.sidebar.selectbox(
         "Industry",
-        ["Retail", "Financial Services", "Healthcare", "Manufacturing", "Legal"]
+        [
+            "Retail", "Financial Services", "Banking", "Insurance",
+            "Healthcare", "Pharmaceuticals", "Manufacturing",
+            "Automotive", "Telecom", "Energy", "Utilities",
+            "Travel & Hospitality", "Logistics", "E-commerce",
+            "Media & Entertainment", "Legal", "Education", "Public Sector"
+        ]
     )
 
     solution_options = [
@@ -213,33 +242,29 @@ def main():
     if meta["solution_type"] == "Other (Please specify)":
         meta["other_solution"] = st.sidebar.text_input("Specify Solution")
 
-    meta["raw_objective"] = st.sidebar.text_area("Business Objective")
+    meta["business_problem"] = st.sidebar.text_area("Business Problem")
 
-    if st.sidebar.button("🪄 Generate Initial Draft"):
-        generate_sow()
-        st.rerun()
+    if st.sidebar.button("🪄 Generate SOW Content"):
+        generate_sow_content()
+        st.success("Content generated successfully")
 
     st.title("📄 Editable SOW")
 
-    st.text_area("2.1 OBJECTIVE", st.session_state.sow_data["sections"]["objective"], height=150, key="obj")
+    sec["objective"] = st.text_area("2.1 Objective", sec["objective"], height=150)
+    render_table("Partner Executive Sponsor", "partner")
+    render_table("Customer Executive Sponsor", "customer")
+    render_table("Cloud Executive Sponsor", "cloud")
+    render_table("Escalation Matrix", "escalation")
 
-    editable_table("Partner Executive Sponsor", "partner")
-    editable_table("Customer Executive Sponsor", "customer")
-    editable_table("Cloud Executive Sponsor", "cloud")
-    editable_table("Project Escalation Contacts", "escalation")
+    sec["dependencies"] = st.text_area("Dependencies", sec["dependencies"], height=120)
+    sec["assumptions"] = st.text_area("Assumptions", sec["assumptions"], height=120)
+    sec["success_demo"] = st.text_area("Success Demonstration", sec["success_demo"], height=120)
+    sec["success_results"] = st.text_area("Expected Results", sec["success_results"], height=120)
+    sec["scope"] = st.text_area("Scope of Work", sec["scope"], height=160)
+    sec["architecture"] = st.text_area("Architecture", sec["architecture"], height=140)
+    sec["commercials"] = st.text_area("Commercials", sec["commercials"], height=120)
 
-    for label, key in [
-        ("Dependencies", "dependencies"),
-        ("Assumptions", "assumptions"),
-        ("Demonstrations", "success_demo"),
-        ("Results", "success_results"),
-        ("Scope of Work", "scope"),
-        ("Solution Architecture", "architecture"),
-        ("Commercials", "commercials")
-    ]:
-        st.text_area(label, st.session_state.sow_data["sections"][key], height=150, key=key)
-
-    docx = create_docx(st.session_state.sow_data)
+    docx = create_docx(data)
     st.download_button(
         "📥 Download SOW (DOCX)",
         docx,
