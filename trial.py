@@ -132,16 +132,15 @@ with tabs[0]:
         status_text = st.empty()
         
         try:
-            # 1. Objective & Outcomes
-            status_text.text("1/8 Generating Project Objective & Outcomes...")
+            # 1. Objective
+            status_text.text("1/8 Generating Concise Project Objective...")
             obj_schema = {
                 "type": "OBJECT",
                 "properties": {
-                    "objective": {"type": "STRING"},
-                    "outcomes": {"type": "ARRAY", "items": {"type": "STRING"}}
+                    "objective": {"type": "STRING"}
                 }
             }
-            res = call_gemini_json(f"Generate a professional business objective and 4 strategic outcomes for a '{sol_type}' solution for '{customer_name}' in the '{industry}' industry. Engagement: {engagement}.", obj_schema)
+            res = call_gemini_json(f"Generate a concise, 1-2 sentence formal business objective for a '{sol_type}' solution for '{customer_name}' in the '{industry}' industry. Engagement: {engagement}.", obj_schema)
             if res: generated_sow.update(res)
             progress_bar.progress(12)
 
@@ -164,14 +163,35 @@ with tabs[0]:
                     }
                 }
             }
-            res = call_gemini_json(f"Generate 4 placeholder stakeholders for a {sol_type} project at {customer_name}. Include roles for Partner, Customer, and AWS.", stk_schema)
+            # Note: Partner sponsor is hardcoded later per user request
+            res = call_gemini_json(f"Generate 3 placeholder stakeholders for a {sol_type} project at {customer_name}: Customer Executive Sponsor, AWS Executive Sponsor, and Escalation Contact.", stk_schema)
+            
+            # HARDCODED PARTNER SPONSOR PER REQUEST
+            fixed_partner = {
+                "role": "Partner Executive Sponsor",
+                "name": "Ram Joshi",
+                "title": "Head of Analytics & ML",
+                "email": "Gaurav.kankaria@oneture.com"
+            }
+            if res and "stakeholders" in res:
+                res["stakeholders"].insert(0, fixed_partner)
+            else:
+                generated_sow["stakeholders"] = [fixed_partner]
+            
             if res: generated_sow.update(res)
             progress_bar.progress(25)
 
-            # 3. Dependencies
-            status_text.text("3/8 Generating Dependencies...")
-            deps = call_gemini_text(f"List 6-8 critical customer dependencies (data access, AWS environment, SMEs) for a '{sol_type}' {engagement} at '{customer_name}'.")
-            generated_sow["dependencies"] = deps
+            # 3. Dependencies & Assumptions
+            status_text.text("3/8 Generating Generalized Assumptions & Dependencies...")
+            deps_schema = {
+                 "type": "OBJECT",
+                 "properties": {
+                     "dependencies": {"type": "STRING"},
+                     "assumptions": {"type": "STRING"}
+                 }
+            }
+            res = call_gemini_json(f"Generate list of general Assumptions and Dependencies for a {sol_type} project. Dependencies should cover data access and environment. Assumptions should cover POC scope.", deps_schema)
+            if res: generated_sow.update(res)
             progress_bar.progress(37)
 
             # 4. Data Characteristics
@@ -198,14 +218,14 @@ with tabs[0]:
             progress_bar.progress(50)
 
             # 5. Success Criteria
-            status_text.text("5/8 Defining Success Criteria...")
-            success = call_gemini_text(f"Provide 5 measurable success criteria for a '{sol_type}' POC. Use metrics like accuracy, latency, and user adoption.")
+            status_text.text("5/8 Defining Detailed Success Criteria...")
+            success = call_gemini_text(f"Provide a detailed list of PoC Success Criteria for a '{sol_type}'. Format as bullet points with specific metrics like accuracy, latency, and business outcomes.")
             generated_sow["success_criteria"] = success
             progress_bar.progress(62)
 
             # 6. Technical Scope
             status_text.text("6/8 Architecting Technical Scope...")
-            scope = call_gemini_text(f"Write a comprehensive technical scope of work for a '{sol_type}' project. Include ingestion, model/agent configuration, and UI development.")
+            scope = call_gemini_text(f"Write a comprehensive 'SCOPE OF WORK - TECHNICAL PROJECT PLAN' for a '{sol_type}' project. Structure it into phases like 'Infrastructure Setup', 'Core Workflows', 'Backend Components', and 'Testing'.")
             generated_sow["technical_scope"] = scope
             progress_bar.progress(75)
 
@@ -230,16 +250,26 @@ with tabs[0]:
             progress_bar.progress(87)
 
             # 8. Timeline & Costs
-            status_text.text("8/8 Finalizing Timeline & Usage metrics...")
+            status_text.text("8/8 Finalizing Timeline & Costing...")
             time_schema = {
                 "type": "OBJECT",
                 "properties": {
-                    "timeline": {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {"phase": {"type": "STRING"}, "weeks": {"type": "STRING"}}}},
+                    "timeline": {
+                        "type": "ARRAY", 
+                        "items": {
+                            "type": "OBJECT", 
+                            "properties": {
+                                "phase": {"type": "STRING"}, 
+                                "task": {"type": "STRING"},
+                                "weeks": {"type": "STRING"}
+                            }
+                        }
+                    },
                     "usage_users": {"type": "NUMBER"},
                     "usage_requests": {"type": "NUMBER"}
                 }
             }
-            res = call_gemini_json(f"Create a high-level timeline and usage estimate (daily users/requests) for a '{engagement}' of a '{sol_type}'.", time_schema)
+            res = call_gemini_json(f"Create a high-level timeline for a '{engagement}' of a '{sol_type}'. Include Phase, Task Description, and Week duration (e.g. Wk1-Wk2).", time_schema)
             if res: generated_sow.update(res)
             progress_bar.progress(100)
             
@@ -247,7 +277,7 @@ with tabs[0]:
             st.session_state.autofill_data = generated_sow
             st.session_state.autofill_done = True
             status_text.success("Complete SOW Draft Generated Successfully!")
-            st.toast("Check all tabs to review and edit the content.")
+            st.toast("Check Tab 6 for the Final Report.")
 
         except Exception as e:
             st.error(f"An error occurred during part-by-part generation: {str(e)}")
@@ -256,25 +286,21 @@ with tabs[0]:
 # --- TAB 2: PROJECT OVERVIEW ---
 with tabs[1]:
     data = st.session_state.autofill_data
-    st.header("2. Project Overview")
+    st.header("2. PROJECT OVERVIEW")
     
     col_obj, col_refined = st.columns([1, 1])
     with col_obj:
         raw_obj = st.text_area("2.1 Business Objective (Input)", placeholder="Refine manual effort, improve ROI...")
         if st.button("Refine Single Objective"):
             with st.spinner("Refining..."):
-                st.session_state.autofill_data["objective"] = call_gemini_text(f"Refine this into a professional SOW objective: {raw_obj}")
+                st.session_state.autofill_data["objective"] = call_gemini_text(f"Refine this into a concise 1-2 sentence formal business objective: {raw_obj}")
     
     with col_refined:
-        final_objective = st.text_area("Objective (Editable)", value=data.get("objective", ""), height=200)
+        final_objective = st.text_area("2.1 OBJECTIVE (Editable)", value=data.get("objective", ""), height=100)
 
-    st.divider()
-    outcome_options = ["Reduce manual effort", "Improve accuracy / quality", "Faster turnaround time", "Cost reduction", "Revenue uplift", "Compliance improvement", "Better customer experience", "Scalability validation"]
-    outcomes = st.multiselect("2.2 Key Outcomes Expected", outcome_options, default=data.get("outcomes", outcome_options[:2]))
-
-    st.subheader("2.3 Stakeholders Information")
+    st.subheader("2.2 PROJECT SPONSOR(S) / STAKEHOLDER(S) / PROJECT TEAM")
     stakeholders = data.get("stakeholders", [
-        {"role": "Partner Executive Sponsor", "name": "", "title": "", "email": ""},
+        {"role": "Partner Executive Sponsor", "name": "Ram Joshi", "title": "Head of Analytics & ML", "email": "Gaurav.kankaria@oneture.com"},
         {"role": "Customer Executive Sponsor", "name": "", "title": "", "email": ""},
         {"role": "AWS Executive Sponsor", "name": "", "title": "", "email": ""},
         {"role": "Escalation Contact", "name": "", "title": "", "email": ""}
@@ -291,11 +317,11 @@ with tabs[1]:
 
 # --- TAB 3: DATA & DEPENDENCIES ---
 with tabs[2]:
-    st.header("3. Assumptions & Dependencies")
-    deps_text = st.text_area("3.1 Customer Dependencies", value=data.get("dependencies", ""), height=200)
+    st.header("2.3 ASSUMPTIONS & DEPENDENCIES")
+    deps_text = st.text_area("Dependencies & Assumptions", value=f"Dependencies:\n{data.get('dependencies', '')}\n\nAssumptions:\n{data.get('assumptions', '')}", height=300)
 
     st.divider()
-    st.subheader("3.2 Data Characteristics")
+    st.subheader("Data Characteristics (Internal Use)")
     raw_data_chars = data.get("data_characteristics", [])
     
     processed_data = []
@@ -309,15 +335,15 @@ with tabs[2]:
 
 # --- TAB 4: SCOPE & ARCHITECTURE ---
 with tabs[3]:
-    st.header("4. PoC Success Criteria")
-    success_text = st.text_area("4.1 Success Criteria", value=data.get("success_criteria", ""), height=150)
+    st.header("2.4 PoC Success Criteria")
+    success_text = st.text_area("Success Criteria", value=data.get("success_criteria", ""), height=200)
 
     st.divider()
-    st.header("5. Scope of Work (Technical)")
-    sow_text = st.text_area("Detailed Project Tasks", value=data.get("technical_scope", ""), height=300)
+    st.header("3 SCOPE OF WORK - TECHNICAL PROJECT PLAN")
+    sow_text = st.text_area("Detailed Scope", value=data.get("technical_scope", ""), height=400)
 
     st.divider()
-    st.header("6. Architecture & AWS Services")
+    st.header("4 SOLUTION ARCHITECTURE")
     arch = data.get("architecture", {})
     col_arch1, col_arch2 = st.columns(2)
     with col_arch1:
@@ -331,18 +357,19 @@ with tabs[3]:
 
 # --- TAB 5: TIMELINE & COSTS ---
 with tabs[4]:
-    st.header("8. Timeline & Phasing")
-    raw_timeline = data.get("timeline", [{"phase": "Setup", "weeks": "Week 1"}])
+    st.header("Development Timelines")
+    raw_timeline = data.get("timeline", [{"phase": "Setup", "task": "Initial Setup", "weeks": "Wk1"}])
     
     final_timeline = []
     for i, step in enumerate(raw_timeline):
-        c1, c2 = st.columns([3, 1])
+        c1, c2, c3 = st.columns([1, 2, 1])
         p_name = c1.text_input("Phase", value=step.get("phase", ""), key=f"p_{i}")
-        p_weeks = c2.text_input("Weeks", value=step.get("weeks", ""), key=f"w_{i}")
-        final_timeline.append({"phase": p_name, "weeks": p_weeks})
+        p_task = c2.text_input("Task", value=step.get("task", ""), key=f"t_{i}")
+        p_weeks = c3.text_input("Weeks", value=step.get("weeks", ""), key=f"w_{i}")
+        final_timeline.append({"Phase": p_name, "Task": p_task, "Weeks": p_weeks})
 
     st.divider()
-    st.header("9. Costing & Usage")
+    st.header("5 RESOURCES & COST ESTIMATES")
     c1, c2, c3 = st.columns(3)
     n_users = c1.number_input("Est. Daily Users", value=int(data.get("usage_users", 100)))
     n_reqs = c2.number_input("Requests/User/Day", value=int(data.get("usage_requests", 5)))
@@ -350,64 +377,62 @@ with tabs[4]:
 
 # --- TAB 6: REVIEW & EXPORT ---
 with tabs[5]:
-    st.header("Final SOW Review")
+    st.header("Final SOW Report")
     
-    doc_markdown = f"""# {sol_type} {engagement} SOW
-**Customer:** {customer_name} | **Industry:** {industry}
+    doc_markdown = f"""# {sol_type} POC SOW
 **Date:** {datetime.now().strftime('%d %B %Y')}
 
 ---
 
-## 2. PROJECT OVERVIEW
-### 2.1 OBJECTIVE
+# 2 PROJECT OVERVIEW
+
+## 2.1 OBJECTIVE
 {data.get('objective', 'TBD')}
 
-### 2.2 KEY OUTCOMES
-{', '.join(outcomes)}
-
-### 2.3 STAKEHOLDERS
-| Role | Name | Title | Email |
-|---|---|---|---|
+## 2.2 PROJECT SPONSOR(S) / STAKEHOLDER(S) / PROJECT TEAM
+| Name | Title | Email/Contact Info |
+|---|---|---|
 """
     for s in final_stakeholders:
-        doc_markdown += f"| {s['Role']} | {s['Name']} | {s['Title']} | {s['Email']} |\n"
+        doc_markdown += f"| {s['Name']} | {s['Title']} | {s['Email']} |\n"
 
     doc_markdown += f"""
----
-
-## 3. ASSUMPTIONS & DEPENDENCIES
+## 2.3 ASSUMPTIONS & DEPENDENCIES
 {deps_text}
 
-### 3.2 DATA CHARACTERISTICS
-"""
-    for d in processed_data:
-        doc_markdown += f"- **{d['type']}**: {d['size']} ({d['format']}), ~{d['volume']} volume\n"
-
-    doc_markdown += f"""
----
-
-## 4. PoC SUCCESS CRITERIA
+## 2.4 PoC Success Criteria
 {success_text}
 
 ---
 
-## 5. SCOPE OF WORK - TECHNICAL
+# 3 SCOPE OF WORK - TECHNICAL PROJECT PLAN
 {sow_text}
 
+### Development Timelines
+| Phase | Task | Timeline |
+|---|---|---|
+"""
+    for t in final_timeline:
+        doc_markdown += f"| {t['Phase']} | {t['Task']} | {t['Weeks']} |\n"
+
+    doc_markdown += f"""
 ---
 
-## 6. ARCHITECTURE
+# 4 SOLUTION ARCHITECTURE / ARCHITECTURAL DIAGRAM
 - **Compute:** {compute}
 - **Storage:** {', '.join(storage)}
 - **ML Services:** {', '.join(ml_services)}
 - **UI:** {ui_layer}
 
+*(Architecture diagram to be inserted here)*
+
 ---
 
-## 8. TIMELINE
+# 5 RESOURCES & COST ESTIMATES
+- **Cost Ownership:** {ownership}
+- **Usage Estimates:** {n_users} users, {n_reqs} requests/day.
+- **Infrastructure Costs:** (Calculated via AWS Pricing Calculator)
 """
-    for t in final_timeline:
-        doc_markdown += f"- **{t['phase']}**: {t['weeks']}\n"
 
     st.markdown(doc_markdown)
     
@@ -420,4 +445,4 @@ with tabs[5]:
 
 st.sidebar.markdown(f"**Current Solution:**\n{sol_type}")
 st.sidebar.markdown(f"**Target Industry:**\n{industry}")
-st.sidebar.info("Generation logic has been updated to part-by-part for higher reliability.")
+st.sidebar.info("Generation updated to match Nykaa SOW format.")
