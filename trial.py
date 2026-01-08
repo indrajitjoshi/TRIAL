@@ -236,9 +236,9 @@ with tabs[5]:
     for k, v in data_details.items():
         doc_content += f"- **{k}**: {v['size']} ({v['format']}), ~{v['volume']} volume.\n"
 
+    doc_content += f"""
 ---
 
-doc_content += f"""
 ## 4. PoC SUCCESS CRITERIA
 {final_success_crit}
 
