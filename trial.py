@@ -29,7 +29,6 @@ INDUSTRIES = [
 ]
 
 ENGAGEMENT_TYPES = ["Proof of Concept (PoC)", "Pilot", "MVP", "Production Rollout", "Assessment / Discovery"]
-SUCCESS_DIMENSIONS = ["Accuracy", "Latency", "Usability", "Explainability", "Coverage", "Cost efficiency", "Integration readiness"]
 AWS_ML_SERVICES = ["Amazon Bedrock", "Amazon SageMaker", "Amazon Rekognition", "Amazon Textract", "Amazon Comprehend", "Amazon Transcribe", "Amazon Translate"]
 
 # --- API UTILITIES ---
@@ -163,34 +162,29 @@ with tabs[0]:
                     }
                 }
             }
-            # Note: Partner sponsor is hardcoded later per user request
-            res = call_gemini_json(f"Generate 3 placeholder stakeholders for a {sol_type} project at {customer_name}: Customer Executive Sponsor, AWS Executive Sponsor, and Escalation Contact.", stk_schema)
             
-            # HARDCODED PARTNER SPONSOR PER REQUEST
-            fixed_partner = {
-                "role": "Partner Executive Sponsor",
-                "name": "Ram Joshi",
-                "title": "Head of Analytics & ML",
-                "email": "Gaurav.kankaria@oneture.com"
-            }
-            if res and "stakeholders" in res:
-                res["stakeholders"].insert(0, fixed_partner)
-            else:
-                generated_sow["stakeholders"] = [fixed_partner]
-            
+            prompt_stakeholders = f"""
+            Generate a list of project stakeholders for a {sol_type} project at {customer_name}. 
+            Must include at least one entry for EACH of the following roles:
+            1. Partner Executive Sponsor (Use sample: Gaurav Kankaria, Head of Analytics & ML, Gaurav.kankaria@oneture.com)
+            2. Customer Executive Sponsor (Create a realistic sample name/title)
+            3. AWS Executive Sponsor (Create a realistic sample name/title)
+            4. Project Escalation Contacts (Include at least 2 contacts, e.g., Omkar Dhavalikar - AI/ML Lead)
+            """
+            res = call_gemini_json(prompt_stakeholders, stk_schema)
             if res: generated_sow.update(res)
             progress_bar.progress(25)
 
             # 3. Dependencies & Assumptions
-            status_text.text("3/8 Generating Generalized Assumptions & Dependencies...")
+            status_text.text("3/8 Generating Assumptions & Dependencies...")
             deps_schema = {
                  "type": "OBJECT",
                  "properties": {
-                     "dependencies": {"type": "STRING"},
-                     "assumptions": {"type": "STRING"}
+                     "dependencies": {"type": "ARRAY", "items": {"type": "STRING"}},
+                     "assumptions": {"type": "ARRAY", "items": {"type": "STRING"}}
                  }
             }
-            res = call_gemini_json(f"Generate list of general Assumptions and Dependencies for a {sol_type} project. Dependencies should cover data access and environment. Assumptions should cover POC scope.", deps_schema)
+            res = call_gemini_json(f"Generate a list of 4-6 specific Assumptions and 4-6 specific Dependencies for a {sol_type} project. Dependencies should cover data access, AWS environment, design guidelines, and input quality.", deps_schema)
             if res: generated_sow.update(res)
             progress_bar.progress(37)
 
@@ -219,14 +213,57 @@ with tabs[0]:
 
             # 5. Success Criteria
             status_text.text("5/8 Defining Detailed Success Criteria...")
-            success = call_gemini_text(f"Provide a detailed list of PoC Success Criteria for a '{sol_type}'. Format as bullet points with specific metrics like accuracy, latency, and business outcomes.")
-            generated_sow["success_criteria"] = success
+            success_schema = {
+                "type": "OBJECT",
+                "properties": {
+                    "success_criteria": {
+                        "type": "ARRAY",
+                        "items": {
+                            "type": "OBJECT",
+                            "properties": {
+                                "heading": {"type": "STRING"},
+                                "points": {"type": "ARRAY", "items": {"type": "STRING"}}
+                            }
+                        }
+                    }
+                }
+            }
+            prompt_success = f"""
+            Generate detailed PoC Success Criteria for a '{sol_type}'. 
+            Structure it with headings like 'Demonstrations', 'Results', 'Accurate Compliance Validation', 'Usability', etc.
+            Under each heading, provide specific, measurable outcomes as bullet points.
+            """
+            res = call_gemini_json(prompt_success, success_schema)
+            if res: generated_sow.update(res)
             progress_bar.progress(62)
 
             # 6. Technical Scope
             status_text.text("6/8 Architecting Technical Scope...")
-            scope = call_gemini_text(f"Write a comprehensive 'SCOPE OF WORK - TECHNICAL PROJECT PLAN' for a '{sol_type}' project. Structure it into phases like 'Infrastructure Setup', 'Core Workflows', 'Backend Components', and 'Testing'.")
-            generated_sow["technical_scope"] = scope
+            scope_schema = {
+                "type": "OBJECT",
+                "properties": {
+                    "technical_phases": {
+                        "type": "OBJECT",
+                        "properties": {
+                            "infrastructure_setup": {"type": "ARRAY", "items": {"type": "STRING"}},
+                            "core_workflows": {"type": "ARRAY", "items": {"type": "STRING"}},
+                            "backend_components": {"type": "ARRAY", "items": {"type": "STRING"}},
+                            "feedback_testing": {"type": "ARRAY", "items": {"type": "STRING"}}
+                        }
+                    }
+                }
+            }
+            prompt_scope = f"""
+            Write a comprehensive Technical Project Plan for a '{sol_type}' project. 
+            Break it down into these exact 4 phases:
+            1. Infrastructure Setup (AWS services, access)
+            2. Create Core Workflows (Ingestion, Validation, Processing, Scoring)
+            3. Backend Components (Compliance engine, Tagging module, Storage)
+            4. Feedback & Testing (UI demo, Validations, User feedback)
+            For each phase, list specific technical tasks.
+            """
+            res = call_gemini_json(prompt_scope, scope_schema)
+            if res: generated_sow.update(res)
             progress_bar.progress(75)
 
             # 7. Architecture
@@ -299,26 +336,55 @@ with tabs[1]:
         final_objective = st.text_area("2.1 OBJECTIVE (Editable)", value=data.get("objective", ""), height=100)
 
     st.subheader("2.2 PROJECT SPONSOR(S) / STAKEHOLDER(S) / PROJECT TEAM")
-    stakeholders = data.get("stakeholders", [
-        {"role": "Partner Executive Sponsor", "name": "Ram Joshi", "title": "Head of Analytics & ML", "email": "Gaurav.kankaria@oneture.com"},
-        {"role": "Customer Executive Sponsor", "name": "", "title": "", "email": ""},
-        {"role": "AWS Executive Sponsor", "name": "", "title": "", "email": ""},
-        {"role": "Escalation Contact", "name": "", "title": "", "email": ""}
-    ])
     
-    final_stakeholders = []
-    for i, s in enumerate(stakeholders):
-        st.markdown(f"**{s.get('role', f'Stakeholder {i}')}**")
+    # Defaults if empty
+    default_stakeholders = [
+        {"role": "Partner Executive Sponsor", "name": "Gaurav Kankaria", "title": "Head of Analytics & ML", "email": "Gaurav.kankaria@oneture.com"},
+        {"role": "Customer Executive Sponsor", "name": "TBD", "title": "Head of Product", "email": "client@example.com"},
+        {"role": "AWS Executive Sponsor", "name": "Anubhav Sood", "title": "AWS Account Executive", "email": "anbhsood@amazon.com"},
+        {"role": "Project Escalation Contacts", "name": "Omkar Dhavalikar", "title": "AI/ML Lead", "email": "omkar.dhavalikar@oneture.com"}
+    ]
+    
+    current_stakeholders = data.get("stakeholders", default_stakeholders)
+    
+    # Display editable table
+    st.info("Edit the stakeholders below. You can modify names, titles, and emails.")
+    
+    # Convert to DataFrame for easier editing in Streamlit if desired, or simple input loop
+    # Using columns for cleaner layout
+    updated_stakeholders = []
+    for i, s in enumerate(current_stakeholders):
+        st.markdown(f"**{s.get('role', 'Stakeholder')}**")
         c1, c2, c3 = st.columns(3)
-        name = c1.text_input("Name", key=f"name_{i}", value=s.get("name", ""))
-        title = c2.text_input("Title", key=f"title_{i}", value=s.get("title", ""))
-        email = c3.text_input("Email", key=f"email_{i}", value=s.get("email", ""))
-        final_stakeholders.append({"Role": s.get('role'), "Name": name, "Title": title, "Email": email})
+        n = c1.text_input("Name", s.get('name', ''), key=f"s_n_{i}")
+        t = c2.text_input("Title", s.get('title', ''), key=f"s_t_{i}")
+        e = c3.text_input("Email", s.get('email', ''), key=f"s_e_{i}")
+        updated_stakeholders.append({"role": s.get('role'), "name": n, "title": t, "email": e})
+    
+    # Allow adding a new stakeholder manually
+    if st.button("+ Add Stakeholder"):
+        updated_stakeholders.append({"role": "New Role", "name": "", "title": "", "email": ""})
+        st.session_state.autofill_data["stakeholders"] = updated_stakeholders
+        st.rerun()
+
+    # Save back to session state
+    st.session_state.autofill_data["stakeholders"] = updated_stakeholders
 
 # --- TAB 3: DATA & DEPENDENCIES ---
 with tabs[2]:
     st.header("2.3 ASSUMPTIONS & DEPENDENCIES")
-    deps_text = st.text_area("Dependencies & Assumptions", value=f"Dependencies:\n{data.get('dependencies', '')}\n\nAssumptions:\n{data.get('assumptions', '')}", height=300)
+    
+    col_d, col_a = st.columns(2)
+    
+    with col_d:
+        st.subheader("Dependencies")
+        deps_list = data.get("dependencies", ["Data access provided", "AWS access provided"])
+        deps_text = st.text_area("List dependencies (one per line)", value="\n".join(deps_list), height=200)
+    
+    with col_a:
+        st.subheader("Assumptions")
+        assump_list = data.get("assumptions", ["POC is not production ready", "English language only"])
+        assump_text = st.text_area("List assumptions (one per line)", value="\n".join(assump_list), height=200)
 
     st.divider()
     st.subheader("Data Characteristics (Internal Use)")
@@ -336,11 +402,33 @@ with tabs[2]:
 # --- TAB 4: SCOPE & ARCHITECTURE ---
 with tabs[3]:
     st.header("2.4 PoC Success Criteria")
-    success_text = st.text_area("Success Criteria", value=data.get("success_criteria", ""), height=200)
+    
+    sc_data = data.get("success_criteria", [])
+    formatted_sc_text = ""
+    for item in sc_data:
+        formatted_sc_text += f"**{item.get('heading', 'Criteria')}**\n"
+        for point in item.get('points', []):
+            formatted_sc_text += f"- {point}\n"
+        formatted_sc_text += "\n"
+        
+    final_sc_text = st.text_area("Edit Success Criteria", value=formatted_sc_text, height=300)
 
     st.divider()
     st.header("3 SCOPE OF WORK - TECHNICAL PROJECT PLAN")
-    sow_text = st.text_area("Detailed Scope", value=data.get("technical_scope", ""), height=400)
+    
+    tech_phases = data.get("technical_phases", {})
+    
+    st.subheader("1. Infrastructure Setup")
+    p1 = st.text_area("Tasks", value="\n".join(tech_phases.get("infrastructure_setup", [])), height=100, key="ph1")
+    
+    st.subheader("2. Create Core Workflows")
+    p2 = st.text_area("Tasks", value="\n".join(tech_phases.get("core_workflows", [])), height=150, key="ph2")
+    
+    st.subheader("3. Backend Components")
+    p3 = st.text_area("Tasks", value="\n".join(tech_phases.get("backend_components", [])), height=100, key="ph3")
+    
+    st.subheader("4. Feedback & Testing")
+    p4 = st.text_area("Tasks", value="\n".join(tech_phases.get("feedback_testing", [])), height=100, key="ph4")
 
     st.divider()
     st.header("4 SOLUTION ARCHITECTURE")
@@ -390,24 +478,50 @@ with tabs[5]:
 {data.get('objective', 'TBD')}
 
 ## 2.2 PROJECT SPONSOR(S) / STAKEHOLDER(S) / PROJECT TEAM
-| Name | Title | Email/Contact Info |
-|---|---|---|
+| Role | Name | Title | Email/Contact Info |
+|---|---|---|---|
 """
-    for s in final_stakeholders:
-        doc_markdown += f"| {s['Name']} | {s['Title']} | {s['Email']} |\n"
+    for s in updated_stakeholders:
+        doc_markdown += f"| {s.get('role', '')} | {s.get('name', '')} | {s.get('title', '')} | {s.get('email', '')} |\n"
 
     doc_markdown += f"""
 ## 2.3 ASSUMPTIONS & DEPENDENCIES
-{deps_text}
 
+**Dependencies:**
+"""
+    for d in deps_text.split('\n'):
+        if d.strip(): doc_markdown += f"- {d.strip()}\n"
+
+    doc_markdown += "\n**Assumptions:**\n"
+    for a in assump_text.split('\n'):
+        if a.strip(): doc_markdown += f"- {a.strip()}\n"
+
+    doc_markdown += f"""
 ## 2.4 PoC Success Criteria
-{success_text}
+{final_sc_text}
 
 ---
 
 # 3 SCOPE OF WORK - TECHNICAL PROJECT PLAN
-{sow_text}
 
+**Phase 1: Infrastructure Setup**
+"""
+    for line in p1.split('\n'):
+        if line.strip(): doc_markdown += f"- {line.strip()}\n"
+
+    doc_markdown += "\n**Phase 2: Create Core Workflows**\n"
+    for line in p2.split('\n'):
+        if line.strip(): doc_markdown += f"- {line.strip()}\n"
+
+    doc_markdown += "\n**Phase 3: Backend Components**\n"
+    for line in p3.split('\n'):
+        if line.strip(): doc_markdown += f"- {line.strip()}\n"
+
+    doc_markdown += "\n**Phase 4: Feedback & Testing**\n"
+    for line in p4.split('\n'):
+        if line.strip(): doc_markdown += f"- {line.strip()}\n"
+
+    doc_markdown += f"""
 ### Development Timelines
 | Phase | Task | Timeline |
 |---|---|---|
