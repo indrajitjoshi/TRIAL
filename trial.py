@@ -2,10 +2,10 @@ import streamlit as st
 import json
 import time
 import requests
-import re
+import os
 from datetime import datetime
 
-# Try importing FPDF for PDF generation
+# Try importing FPDF for PDF generation (Optional)
 try:
     from fpdf import FPDF
 except ImportError:
@@ -14,7 +14,9 @@ except ImportError:
 # --- CONFIGURATION ---
 ST_PAGE_TITLE = "GenAI SOW Architect"
 ST_PAGE_ICON = "📄"
-GEMINI_MODEL = "gemini-2.5-flash-preview-09-2025"
+# GEMINI_MODEL = "gemini-2.5-flash-preview-09-2025" 
+# Note: Use a standard stable model name if the preview model is unavailable in your region.
+GEMINI_MODEL = "gemini-2.0-flash-exp" 
 
 # --- CONSTANTS & DROPDOWNS ---
 SOLUTION_TYPES = [
@@ -70,15 +72,19 @@ def clean_json_string(text):
     text = text.strip()
     if text.startswith("```json"):
         text = text[7:]
-    if text.startswith("```"):
+    elif text.startswith("```"):
         text = text[3:]
     if text.endswith("```"):
         text = text[:-3]
     return text.strip()
 
-def call_gemini_json(prompt, schema, system_instruction="You are a professional solution architect."):
+def call_gemini_json(prompt, schema, system_instruction="You are a professional solution architect.", api_key=None):
     """Calls Gemini with a structured JSON output requirement."""
-    api_key = "" # Provided by environment
+    if not api_key:
+        return None
+        
+    # --- CRITICAL FIX: CLEAN URL STRING ---
+    # The previous error was caused by markdown brackets []() in the URL string
     url = f"[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/){GEMINI_MODEL}:generateContent?key={api_key}"
     
     payload = {
@@ -92,21 +98,29 @@ def call_gemini_json(prompt, schema, system_instruction="You are a professional 
     
     headers = {"Content-Type": "application/json"}
     
-    for i in range(5):
+    for i in range(3): # Reduced retries for faster feedback
         try:
-            response = requests.post(url, json=payload, headers=headers, timeout=60)
+            response = requests.post(url, json=payload, headers=headers, timeout=30)
             if response.status_code == 200:
                 result = response.json()
-                text_content = result.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', "{}")
-                # Parse JSON safely
-                cleaned_text = clean_json_string(text_content)
-                return json.loads(cleaned_text)
+                try:
+                    text_content = result.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', "{}")
+                    cleaned_text = clean_json_string(text_content)
+                    return json.loads(cleaned_text)
+                except (IndexError, json.JSONDecodeError):
+                    # Fallback if structure is unexpected
+                    return None
             else:
-                time.sleep(2**i)
+                # Log error for debugging if needed (but keep UI clean)
+                print(f"API Error {response.status_code}: {response.text}")
+                time.sleep(1)
         except Exception as e:
-            if i == 4: st.error(f"API Connection Error: {str(e)}")
-            time.sleep(2**i)
+            time.sleep(1)
+            
     return None
+
+# --- PAGE SETUP ---
+st.set_page_config(page_title=ST_PAGE_TITLE, page_icon=ST_PAGE_ICON, layout="wide")
 
 # --- SESSION STATE INITIALIZATION ---
 if "autofill_data" not in st.session_state:
@@ -114,8 +128,19 @@ if "autofill_data" not in st.session_state:
 if "autofill_done" not in st.session_state:
     st.session_state.autofill_done = False
 
-# --- PAGE SETUP ---
-st.set_page_config(page_title=ST_PAGE_TITLE, page_icon=ST_PAGE_ICON, layout="wide")
+# --- SIDEBAR: API KEY ---
+with st.sidebar:
+    st.header("⚙️ Configuration")
+    api_key_input = st.text_input("Gemini API Key", type="password", help="Enter your Google Gemini API Key here.")
+    
+    # Check environment variable if input is empty
+    if not api_key_input:
+        api_key_input = os.environ.get("GEMINI_API_KEY", "")
+    
+    if not api_key_input:
+        st.warning("⚠️ Please enter an API Key to generate content.")
+    else:
+        st.success("API Key detected.")
 
 st.title(f"{ST_PAGE_ICON} {ST_PAGE_TITLE}")
 st.markdown("Create end-to-end professional SOWs tailored to specific AWS GenAI solutions.")
@@ -131,135 +156,129 @@ tabs = st.tabs([
 ])
 
 # --- TAB 1: CONTEXT ---
-# This section uses Dropdowns (st.selectbox) as requested
 with tabs[0]:
     col1, col2 = st.columns(2)
     with col1:
-        # 1.1 Solution Type Dropdown
         sol_type_select = st.selectbox("1.1 Solution Type", SOLUTION_TYPES)
-        if sol_type_select == "Other":
-            sol_type = st.text_input("Specify Solution Type")
-        else:
-            sol_type = sol_type_select
+        sol_type = st.text_input("Specify Solution Type", value="") if sol_type_select == "Other" else sol_type_select
             
-        # 1.2 Engagement Type Dropdown
         engagement = st.selectbox("1.2 Engagement Type", ENGAGEMENT_TYPES)
         
     with col2:
-        # 1.3 Industry Dropdown
         industry_select = st.selectbox("1.3 Industry / Domain", INDUSTRIES)
-        if industry_select == "Other":
-            industry = st.text_input("Specify Industry")
-        else:
-            industry = industry_select
+        industry = st.text_input("Specify Industry", value="") if industry_select == "Other" else industry_select
             
         customer_name = st.text_input("Customer Name", "Acme Global")
 
     st.divider()
+    
     if st.button("✨ GENERATE COMPLETE SOW DRAFT (SECTION-BY-SECTION)", use_container_width=True, type="primary"):
-        generated_sow = {}
-        sys_instruct = f"You are a specialized Solution Architect for the {industry} industry. Writing SOW for '{sol_type}'."
-        
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        try:
-            # 1. Objective
-            status_text.text(f"1/7 Generating Specific Objective for {sol_type}...")
-            obj_schema = {"type": "OBJECT", "properties": {"objective": {"type": "STRING"}}}
-            res = call_gemini_json(f"Generate a concise, 1-2 sentence formal business objective specifically for a '{sol_type}' solution. Focus on accuracy, automation, speed. Do not use generic goals.", obj_schema, sys_instruct)
-            if res: generated_sow.update(res)
-            progress_bar.progress(15)
-
-            # 2. Stakeholders
-            status_text.text("2/7 Generating Stakeholder information...")
-            stk_schema = {
-                "type": "OBJECT", "properties": {
-                    "stakeholders": {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {"role": {"type": "STRING"}, "name": {"type": "STRING"}, "title": {"type": "STRING"}, "email": {"type": "STRING"}}}}
-                }
-            }
-            prompt_stakeholders = f"""Generate project stakeholders for {sol_type} at {customer_name}. 
-            Required Roles:
-            1. Partner Executive Sponsor: Name "Ram Joshi", Title "Head of Analytics & ML", Email "ram.joshi@oneture.com".
-            2. Customer Executive Sponsor: Realistic name/title.
-            3. AWS Executive Sponsor: Realistic name, Title "AWS Account Executive".
-            4. Project Escalation Contacts: Generate TWO distinct people."""
-            res = call_gemini_json(prompt_stakeholders, stk_schema, sys_instruct)
-            if res: generated_sow.update(res)
-            progress_bar.progress(30)
-
-            # 3. Dependencies
-            status_text.text(f"3/7 Generating Dependencies...")
-            deps_schema = {
-                 "type": "OBJECT", "properties": {
-                     "dependencies": {"type": "ARRAY", "items": {"type": "STRING"}},
-                     "assumptions": {"type": "ARRAY", "items": {"type": "STRING"}}
-                 }
-            }
-            res = call_gemini_json(f"List 6 Assumptions and 6 Dependencies SPECIFIC to a '{sol_type}' project.", deps_schema, sys_instruct)
-            if res: generated_sow.update(res)
-            progress_bar.progress(45)
-
-            # 4. Success Criteria
-            status_text.text("4/7 Defining Success Criteria...")
-            success_schema = {
-                "type": "OBJECT", "properties": {
-                    "success_criteria": {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {"heading": {"type": "STRING"}, "points": {"type": "ARRAY", "items": {"type": "STRING"}}}}}
-                }
-            }
-            res = call_gemini_json(f"Generate detailed PoC Success Criteria for '{sol_type}'. Sections: Demonstrations, Results, Usability.", success_schema, sys_instruct)
-            if res: generated_sow.update(res)
-            progress_bar.progress(60)
-
-            # 5. Technical Scope
-            status_text.text(f"5/7 Architecting Technical Scope...")
-            scope_schema = {
-                "type": "OBJECT", "properties": {
-                    "technical_phases": {"type": "OBJECT", "properties": {
-                        "infrastructure_setup": {"type": "ARRAY", "items": {"type": "STRING"}},
-                        "core_workflows": {"type": "ARRAY", "items": {"type": "STRING"}},
-                        "backend_components": {"type": "ARRAY", "items": {"type": "STRING"}},
-                        "feedback_testing": {"type": "ARRAY", "items": {"type": "STRING"}}
-                    }}
-                }
-            }
-            res = call_gemini_json(f"Write Technical Project Plan for '{sol_type}'. 4 phases: Infrastructure Setup, Create Core Workflows, Backend Components, Feedback & Testing.", scope_schema, sys_instruct)
-            if res: generated_sow.update(res)
-            progress_bar.progress(75)
-
-            # 6. Architecture
-            status_text.text("6/7 Selecting AWS Services...")
-            arch_schema = {
-                "type": "OBJECT", "properties": {
-                    "architecture": {"type": "OBJECT", "properties": {
-                        "compute": {"type": "STRING"}, "storage": {"type": "STRING"}, "ml_services": {"type": "STRING"}, "ui": {"type": "STRING"}
-                    }}
-                }
-            }
-            res = call_gemini_json(f"Design AWS architecture for '{sol_type}'. Suggest text for Compute, Storage, ML Services, UI.", arch_schema, sys_instruct)
-            if res: generated_sow.update(res)
-            progress_bar.progress(90)
-
-            # 7. Timeline
-            status_text.text("7/7 Finalizing Timeline...")
-            time_schema = {
-                "type": "OBJECT", "properties": {
-                    "timeline": {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {"phase": {"type": "STRING"}, "task": {"type": "STRING"}, "weeks": {"type": "STRING"}}}},
-                    "usage_users": {"type": "NUMBER"}, "usage_requests": {"type": "NUMBER"}
-                }
-            }
-            res = call_gemini_json(f"Create high-level timeline for '{sol_type}'. Include Phase, Task, Weeks.", time_schema, sys_instruct)
-            if res: generated_sow.update(res)
-            progress_bar.progress(100)
+        if not api_key_input:
+            st.error("Please provide a Gemini API Key in the sidebar to proceed.")
+        else:
+            generated_sow = {}
+            sys_instruct = f"You are a specialized Solution Architect for the {industry} industry. Writing SOW for '{sol_type}'."
             
-            st.session_state.autofill_data = generated_sow
-            st.session_state.autofill_done = True
-            status_text.success("Complete SOW Draft Generated Successfully!")
-            st.toast("Check Tab 6 for the Final Report.")
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            try:
+                # 1. Objective
+                status_text.text(f"1/7 Generating Specific Objective for {sol_type}...")
+                obj_schema = {"type": "OBJECT", "properties": {"objective": {"type": "STRING"}}}
+                res = call_gemini_json(f"Generate a concise, 1-2 sentence formal business objective specifically for a '{sol_type}' solution. Focus on accuracy, automation, speed. Do not use generic goals.", obj_schema, sys_instruct, api_key_input)
+                if res: generated_sow.update(res)
+                progress_bar.progress(15)
 
-        except Exception as e:
-            st.error(f"Error: {str(e)}")
-            status_text.text("Generation paused.")
+                # 2. Stakeholders
+                status_text.text("2/7 Generating Stakeholder information...")
+                stk_schema = {
+                    "type": "OBJECT", "properties": {
+                        "stakeholders": {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {"role": {"type": "STRING"}, "name": {"type": "STRING"}, "title": {"type": "STRING"}, "email": {"type": "STRING"}}}}
+                    }
+                }
+                prompt_stakeholders = f"""Generate project stakeholders for {sol_type} at {customer_name}. 
+                Required Roles:
+                1. Partner Executive Sponsor: Name "Partner Exec", Title "Head of Analytics & ML".
+                2. Customer Executive Sponsor: Realistic name/title.
+                3. AWS Executive Sponsor: Realistic name, Title "AWS Account Executive".
+                4. Project Escalation Contacts: Generate TWO distinct people."""
+                res = call_gemini_json(prompt_stakeholders, stk_schema, sys_instruct, api_key_input)
+                if res: generated_sow.update(res)
+                progress_bar.progress(30)
+
+                # 3. Dependencies
+                status_text.text(f"3/7 Generating Dependencies...")
+                deps_schema = {
+                     "type": "OBJECT", "properties": {
+                          "dependencies": {"type": "ARRAY", "items": {"type": "STRING"}},
+                          "assumptions": {"type": "ARRAY", "items": {"type": "STRING"}}
+                     }
+                }
+                res = call_gemini_json(f"List 6 Assumptions and 6 Dependencies SPECIFIC to a '{sol_type}' project.", deps_schema, sys_instruct, api_key_input)
+                if res: generated_sow.update(res)
+                progress_bar.progress(45)
+
+                # 4. Success Criteria
+                status_text.text("4/7 Defining Success Criteria...")
+                success_schema = {
+                    "type": "OBJECT", "properties": {
+                        "success_criteria": {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {"heading": {"type": "STRING"}, "points": {"type": "ARRAY", "items": {"type": "STRING"}}}}}
+                    }
+                }
+                res = call_gemini_json(f"Generate detailed PoC Success Criteria for '{sol_type}'. Sections: Demonstrations, Results, Usability.", success_schema, sys_instruct, api_key_input)
+                if res: generated_sow.update(res)
+                progress_bar.progress(60)
+
+                # 5. Technical Scope
+                status_text.text(f"5/7 Architecting Technical Scope...")
+                scope_schema = {
+                    "type": "OBJECT", "properties": {
+                        "technical_phases": {"type": "OBJECT", "properties": {
+                            "infrastructure_setup": {"type": "ARRAY", "items": {"type": "STRING"}},
+                            "core_workflows": {"type": "ARRAY", "items": {"type": "STRING"}},
+                            "backend_components": {"type": "ARRAY", "items": {"type": "STRING"}},
+                            "feedback_testing": {"type": "ARRAY", "items": {"type": "STRING"}}
+                        }}
+                    }
+                }
+                res = call_gemini_json(f"Write Technical Project Plan for '{sol_type}'. 4 phases: Infrastructure Setup, Create Core Workflows, Backend Components, Feedback & Testing.", scope_schema, sys_instruct, api_key_input)
+                if res: generated_sow.update(res)
+                progress_bar.progress(75)
+
+                # 6. Architecture
+                status_text.text("6/7 Selecting AWS Services...")
+                arch_schema = {
+                    "type": "OBJECT", "properties": {
+                        "architecture": {"type": "OBJECT", "properties": {
+                            "compute": {"type": "STRING"}, "storage": {"type": "STRING"}, "ml_services": {"type": "STRING"}, "ui": {"type": "STRING"}
+                        }}
+                    }
+                }
+                res = call_gemini_json(f"Design AWS architecture for '{sol_type}'. Suggest text for Compute, Storage, ML Services, UI.", arch_schema, sys_instruct, api_key_input)
+                if res: generated_sow.update(res)
+                progress_bar.progress(90)
+
+                # 7. Timeline
+                status_text.text("7/7 Finalizing Timeline...")
+                time_schema = {
+                    "type": "OBJECT", "properties": {
+                        "timeline": {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {"phase": {"type": "STRING"}, "task": {"type": "STRING"}, "weeks": {"type": "STRING"}}}},
+                        "usage_users": {"type": "NUMBER"}, "usage_requests": {"type": "NUMBER"}
+                    }
+                }
+                res = call_gemini_json(f"Create high-level timeline for '{sol_type}'. Include Phase, Task, Weeks.", time_schema, sys_instruct, api_key_input)
+                if res: generated_sow.update(res)
+                progress_bar.progress(100)
+                
+                st.session_state.autofill_data = generated_sow
+                st.session_state.autofill_done = True
+                status_text.success("Complete SOW Draft Generated Successfully!")
+                st.toast("Check Tab 6 for the Final Report.")
+
+            except Exception as e:
+                st.error(f"Error during generation: {str(e)}")
+                status_text.text("Generation paused.")
 
 # --- UI LOGIC ---
 data = st.session_state.autofill_data
@@ -268,7 +287,6 @@ data = st.session_state.autofill_data
 with tabs[1]:
     st.header("2. PROJECT OVERVIEW")
     st.subheader("2.1 OBJECTIVE")
-    # Make sure we default to a prompt if empty
     default_obj = data.get("objective", "Click 'Generate' in Tab 1 to populate this objective.")
     final_objective = st.text_area("Edit Objective", value=default_obj, height=100)
     data["objective"] = final_objective
@@ -319,7 +337,6 @@ with tabs[2]:
     st.header("3 SCOPE OF WORK - TECHNICAL PROJECT PLAN")
     tech_phases = data.get("technical_phases", {})
     
-    # Editable Text Areas for Phases
     st.subheader("Phase 1: Infrastructure Setup")
     p1_val = "\n".join(tech_phases.get("infrastructure_setup", [])) if isinstance(tech_phases.get("infrastructure_setup"), list) else tech_phases.get("infrastructure_setup", "")
     p1 = st.text_area("Tasks", value=p1_val, height=120, key="ph1")
@@ -342,7 +359,6 @@ with tabs[3]:
     st.info("Edit the architecture components below.")
     arch = data.get("architecture", {})
     
-    # FULLY EDITABLE TEXT INPUTS
     compute = st.text_input("Compute", value=arch.get("compute", "AWS Lambda, Step Functions"))
     storage = st.text_input("Storage", value=arch.get("storage", "Amazon S3, DynamoDB"))
     ml_services = st.text_input("ML Services", value=arch.get("ml_services", "Amazon Bedrock"))
@@ -378,45 +394,62 @@ with tabs[4]:
 with tabs[5]:
     st.header("Final SOW Export")
     
-    # 1. GENERATE HTML (Compatible with Word)
+    # 1. GENERATE WORD DOC (HTML-based)
+    # This creates an HTML file but names it .doc. Word opens this fine, though it may show a warning.
     html_content = f"""
-    <html>
-    <head><style>
-        body {{ font-family: Arial, sans-serif; }}
-        table {{ border-collapse: collapse; width: 100%; }}
-        th, td {{ border: 1px solid black; padding: 8px; text-align: left; }}
+    <html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='[http://www.w3.org/TR/REC-html40](http://www.w3.org/TR/REC-html40)'>
+    <head><title>Statement of Work</title>
+    <style>
+        body {{ font-family: 'Arial', sans-serif; line-height: 1.6; }}
+        table {{ border-collapse: collapse; width: 100%; margin-bottom: 20px; }}
+        th, td {{ border: 1px solid #000; padding: 10px; text-align: left; }}
         th {{ background-color: #f2f2f2; }}
-        h1, h2 {{ color: #232f3e; }}
-    </style></head>
+        h1 {{ font-size: 24pt; color: #232f3e; border-bottom: 2px solid #232f3e; padding-bottom: 10px; }}
+        h2 {{ font-size: 18pt; color: #232f3e; margin-top: 30px; }}
+        h3 {{ font-size: 14pt; color: #444; margin-top: 20px; }}
+        ul {{ margin-bottom: 15px; }}
+        li {{ margin-bottom: 5px; }}
+    </style>
+    </head>
     <body>
+    
     <h1>Statement of Work: {sol_type}</h1>
     <p><strong>Customer:</strong> {customer_name}</p>
+    <p><strong>Date:</strong> {datetime.now().strftime('%Y-%m-%d')}</p>
     <hr>
     
-    <h2>2. PROJECT OVERVIEW</h2>
-    <h3>2.1 OBJECTIVE</h3>
+    <h2>1. PROJECT OVERVIEW</h2>
+    <h3>1.1 OBJECTIVE</h3>
     <p>{final_objective}</p>
     
-    <h3>2.2 STAKEHOLDERS</h3>
+    <h3>1.2 STAKEHOLDERS</h3>
     <table>
         <tr><th>Role</th><th>Name</th><th>Title</th><th>Email</th></tr>
         {"".join([f"<tr><td>{s['role']}</td><td>{s['name']}</td><td>{s['title']}</td><td>{s['email']}</td></tr>" for s in updated_stakeholders])}
     </table>
     
-    <h3>2.3 ASSUMPTIONS & DEPENDENCIES</h3>
-    <h4>Dependencies</h4>
-    <ul>{"".join([f"<li>{d}</li>" for d in deps_text.splitlines() if d.strip()])}</ul>
-    <h4>Assumptions</h4>
-    <ul>{"".join([f"<li>{a}</li>" for a in assump_text.splitlines() if a.strip()])}</ul>
+    <h3>1.3 ASSUMPTIONS & DEPENDENCIES</h3>
+    <table style="border: none;">
+    <tr>
+    <td style="border: none; vertical-align: top; width: 50%;">
+        <h4>Dependencies</h4>
+        <ul>{"".join([f"<li>{d}</li>" for d in deps_text.splitlines() if d.strip()])}</ul>
+    </td>
+    <td style="border: none; vertical-align: top; width: 50%;">
+        <h4>Assumptions</h4>
+        <ul>{"".join([f"<li>{a}</li>" for a in assump_text.splitlines() if a.strip()])}</ul>
+    </td>
+    </tr>
+    </table>
     
-    <h3>2.4 PoC SUCCESS CRITERIA</h3>
-    <pre style="font-family: Arial;">{final_sc_text}</pre>
+    <h3>1.4 PoC SUCCESS CRITERIA</h3>
+    <div style="white-space: pre-wrap;">{final_sc_text.replace(chr(10), '<br>')}</div>
     
-    <h2>3. SCOPE OF WORK</h2>
-    <h4>Phase 1: Infrastructure Setup</h4><p>{p1}</p>
-    <h4>Phase 2: Core Workflows</h4><p>{p2}</p>
-    <h4>Phase 3: Backend Components</h4><p>{p3}</p>
-    <h4>Phase 4: Feedback & Testing</h4><p>{p4}</p>
+    <h2>2. SCOPE OF WORK</h2>
+    <h3>Phase 1: Infrastructure Setup</h3><p>{p1.replace(chr(10), '<br>')}</p>
+    <h3>Phase 2: Core Workflows</h3><p>{p2.replace(chr(10), '<br>')}</p>
+    <h3>Phase 3: Backend Components</h3><p>{p3.replace(chr(10), '<br>')}</p>
+    <h3>Phase 4: Feedback & Testing</h3><p>{p4.replace(chr(10), '<br>')}</p>
     
     <h3>Development Timelines</h3>
     <table>
@@ -424,7 +457,7 @@ with tabs[5]:
         {"".join([f"<tr><td>{t['Phase']}</td><td>{t['Task']}</td><td>{t['Weeks']}</td></tr>" for t in final_timeline])}
     </table>
     
-    <h2>4. ARCHITECTURE</h2>
+    <h2>3. ARCHITECTURE</h2>
     <ul>
         <li><strong>Compute:</strong> {compute}</li>
         <li><strong>Storage:</strong> {storage}</li>
@@ -432,61 +465,66 @@ with tabs[5]:
         <li><strong>UI Layer:</strong> {ui_layer}</li>
     </ul>
     
-    <h2>5. RESOURCES</h2>
+    <h2>4. RESOURCES</h2>
     <p><strong>Ownership:</strong> {ownership}</p>
     <p><strong>Estimates:</strong> {n_users} users, {n_reqs} requests/day</p>
+    
     </body></html>
     """
     
-    st.download_button(
-        label="📥 Download as Word Doc (.doc)",
-        data=html_content,
-        file_name=f"{customer_name}_SOW.doc",
-        mime="application/msword"
-    )
+    col_d1, col_d2 = st.columns(2)
+    with col_d1:
+        st.download_button(
+            label="📥 Download as Word Doc",
+            data=html_content,
+            file_name=f"{customer_name.replace(' ', '_')}_SOW.doc",
+            mime="application/msword",
+            use_container_width=True,
+            type="primary"
+        )
+        st.caption("ℹ️ This downloads a .doc file. If Word shows a warning, click 'Yes' to open it.")
 
-    # 2. GENERATE PDF (If FPDF available)
-    if FPDF:
-        def create_pdf():
-            pdf = PDF()
-            pdf.add_page()
-            pdf.chapter_title("2. PROJECT OVERVIEW")
-            
-            pdf.set_font('Arial', 'B', 11); pdf.cell(0, 8, "2.1 OBJECTIVE", 0, 1)
-            pdf.set_font('Arial', '', 10); pdf.multi_cell(0, 5, clean_text_pdf(final_objective)); pdf.ln(5)
-            
-            pdf.set_font('Arial', 'B', 11); pdf.cell(0, 8, "2.2 STAKEHOLDERS", 0, 1)
-            pdf.set_font('Arial', 'B', 9)
-            col_w = [45, 45, 45, 45]
-            pdf.cell(col_w[0], 7, "Role", 1); pdf.cell(col_w[1], 7, "Name", 1); pdf.cell(col_w[2], 7, "Title", 1); pdf.cell(col_w[3], 7, "Email", 1, 1)
-            pdf.set_font('Arial', '', 9)
-            for s in updated_stakeholders:
-                pdf.cell(col_w[0], 7, clean_text_pdf(s['role'][:25]), 1)
-                pdf.cell(col_w[1], 7, clean_text_pdf(s['name'][:25]), 1)
-                pdf.cell(col_w[2], 7, clean_text_pdf(s['title'][:25]), 1)
-                pdf.cell(col_w[3], 7, clean_text_pdf(s['email'][:25]), 1, 1)
-            pdf.ln(5)
-            
-            pdf.chapter_title("3. SCOPE OF WORK")
-            pdf.set_font('Arial', 'B', 10); pdf.cell(0, 6, "Phase 1: Infrastructure", 0, 1)
-            pdf.set_font('Arial', '', 10); pdf.multi_cell(0, 5, clean_text_pdf(p1)); pdf.ln(3)
-            pdf.set_font('Arial', 'B', 10); pdf.cell(0, 6, "Phase 2: Workflows", 0, 1)
-            pdf.set_font('Arial', '', 10); pdf.multi_cell(0, 5, clean_text_pdf(p2)); pdf.ln(3)
-            
-            pdf.chapter_title("4. ARCHITECTURE")
-            pdf.multi_cell(0, 5, clean_text_pdf(f"Compute: {compute}\nStorage: {storage}\nML: {ml_services}\nUI: {ui_layer}"))
-            
-            return pdf.output(dest='S').encode('latin-1')
+    with col_d2:
+        # 2. GENERATE PDF (If FPDF available)
+        if FPDF:
+            def create_pdf():
+                pdf = PDF()
+                pdf.add_page()
+                pdf.chapter_title("1. PROJECT OVERVIEW")
+                
+                pdf.set_font('Arial', 'B', 11); pdf.cell(0, 8, "1.1 OBJECTIVE", 0, 1)
+                pdf.set_font('Arial', '', 10); pdf.multi_cell(0, 5, clean_text_pdf(final_objective)); pdf.ln(5)
+                
+                pdf.set_font('Arial', 'B', 11); pdf.cell(0, 8, "1.2 STAKEHOLDERS", 0, 1)
+                pdf.set_font('Arial', 'B', 9)
+                col_w = [45, 45, 45, 45]
+                pdf.cell(col_w[0], 7, "Role", 1); pdf.cell(col_w[1], 7, "Name", 1); pdf.cell(col_w[2], 7, "Title", 1); pdf.cell(col_w[3], 7, "Email", 1, 1)
+                pdf.set_font('Arial', '', 9)
+                for s in updated_stakeholders:
+                    pdf.cell(col_w[0], 7, clean_text_pdf(s['role'][:25]), 1)
+                    pdf.cell(col_w[1], 7, clean_text_pdf(s['name'][:25]), 1)
+                    pdf.cell(col_w[2], 7, clean_text_pdf(s['title'][:25]), 1)
+                    pdf.cell(col_w[3], 7, clean_text_pdf(s['email'][:25]), 1, 1)
+                pdf.ln(5)
+                
+                pdf.chapter_title("2. SCOPE OF WORK")
+                pdf.set_font('Arial', 'B', 10); pdf.cell(0, 6, "Phase 1: Infrastructure", 0, 1)
+                pdf.set_font('Arial', '', 10); pdf.multi_cell(0, 5, clean_text_pdf(p1)); pdf.ln(3)
+                pdf.set_font('Arial', 'B', 10); pdf.cell(0, 6, "Phase 2: Workflows", 0, 1)
+                pdf.set_font('Arial', '', 10); pdf.multi_cell(0, 5, clean_text_pdf(p2)); pdf.ln(3)
+                
+                return pdf.output(dest='S').encode('latin-1')
 
-        try:
-            pdf_data = create_pdf()
-            st.download_button(
-                label="📥 Download as PDF",
-                data=pdf_data,
-                file_name=f"{customer_name}_SOW.pdf",
-                mime="application/pdf"
-            )
-        except Exception as e:
-            st.error(f"PDF Gen Error: {e}")
-    else:
-        st.warning("Install 'fpdf' (pip install fpdf) to enable PDF downloads. Use Word download above.")
+            try:
+                pdf_data = create_pdf()
+                st.download_button(
+                    label="📥 Download as PDF",
+                    data=pdf_data,
+                    file_name=f"{customer_name.replace(' ', '_')}_SOW.pdf",
+                    mime="application/pdf",
+                    use_container_width=True
+                )
+            except Exception as e:
+                st.error(f"PDF Gen Error: {e}")
+        else:
+            st.warning("PDF export unavailable (requires fpdf).")
