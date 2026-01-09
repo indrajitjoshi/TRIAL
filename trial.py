@@ -83,8 +83,8 @@ def call_gemini_json(prompt, schema, system_instruction="You are a professional 
     if not api_key:
         return None
         
-    # --- CRITICAL FIX: CLEAN URL STRING ---
-    # The previous error was caused by markdown brackets []() in the URL string
+    # --- URL FIX ---
+    # Removed markdown brackets that were causing API connection errors
     url = f"[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/){GEMINI_MODEL}:generateContent?key={api_key}"
     
     payload = {
@@ -134,11 +134,15 @@ with st.sidebar:
     api_key_input = st.text_input("Gemini API Key", type="password", help="Enter your Google Gemini API Key here.")
     
     # Check environment variable if input is empty
+    # Checks for both GEMINI_API_KEY and GOOGLE_API_KEY
     if not api_key_input:
         api_key_input = os.environ.get("GEMINI_API_KEY", "")
+    if not api_key_input:
+        api_key_input = os.environ.get("GOOGLE_API_KEY", "")
     
     if not api_key_input:
         st.warning("⚠️ Please enter an API Key to generate content.")
+        st.markdown("[Get a Gemini API Key](https://aistudio.google.com/app/apikey)")
     else:
         st.success("API Key detected.")
 
