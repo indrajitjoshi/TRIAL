@@ -84,7 +84,7 @@ def call_gemini_json(prompt, schema, system_instruction="You are a professional 
         return None
         
     # --- URL FIX ---
-    # Removed markdown brackets that were causing API connection errors
+    # Fixed the URL string which previously contained markdown brackets causing API failures
     url = f"[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/){GEMINI_MODEL}:generateContent?key={api_key}"
     
     payload = {
@@ -153,7 +153,7 @@ st.markdown("Create end-to-end professional SOWs tailored to specific AWS GenAI 
 tabs = st.tabs([
     "1. High-Level Context", 
     "2. Project Overview", 
-    "3. Scope & Dependencies", 
+    "3. Details & Success Criteria", 
     "4. Architecture", 
     "5. Timeline & Costs",
     "6. Review & Export"
@@ -188,31 +188,32 @@ with tabs[0]:
             
             try:
                 # 1. Objective
-                status_text.text(f"1/7 Generating Specific Objective for {sol_type}...")
+                status_text.text(f"1/6 Generating Specific Objective for {sol_type}...")
                 obj_schema = {"type": "OBJECT", "properties": {"objective": {"type": "STRING"}}}
                 res = call_gemini_json(f"Generate a concise, 1-2 sentence formal business objective specifically for a '{sol_type}' solution. Focus on accuracy, automation, speed. Do not use generic goals.", obj_schema, sys_instruct, api_key_input)
                 if res: generated_sow.update(res)
-                progress_bar.progress(15)
+                progress_bar.progress(20)
 
                 # 2. Stakeholders
-                status_text.text("2/7 Generating Stakeholder information...")
+                status_text.text("2/6 Generating Stakeholder information...")
+                # Removed 'Role' from schema
                 stk_schema = {
                     "type": "OBJECT", "properties": {
-                        "stakeholders": {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {"role": {"type": "STRING"}, "name": {"type": "STRING"}, "title": {"type": "STRING"}, "email": {"type": "STRING"}}}}
+                        "stakeholders": {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {"name": {"type": "STRING"}, "title": {"type": "STRING"}, "email": {"type": "STRING"}}}}
                     }
                 }
                 prompt_stakeholders = f"""Generate project stakeholders for {sol_type} at {customer_name}. 
-                Required Roles:
+                Required Contacts:
                 1. Partner Executive Sponsor: Name "Partner Exec", Title "Head of Analytics & ML".
                 2. Customer Executive Sponsor: Realistic name/title.
                 3. AWS Executive Sponsor: Realistic name, Title "AWS Account Executive".
                 4. Project Escalation Contacts: Generate TWO distinct people."""
                 res = call_gemini_json(prompt_stakeholders, stk_schema, sys_instruct, api_key_input)
                 if res: generated_sow.update(res)
-                progress_bar.progress(30)
+                progress_bar.progress(40)
 
                 # 3. Dependencies
-                status_text.text(f"3/7 Generating Dependencies...")
+                status_text.text(f"3/6 Generating Dependencies...")
                 deps_schema = {
                      "type": "OBJECT", "properties": {
                           "dependencies": {"type": "ARRAY", "items": {"type": "STRING"}},
@@ -221,10 +222,10 @@ with tabs[0]:
                 }
                 res = call_gemini_json(f"List 6 Assumptions and 6 Dependencies SPECIFIC to a '{sol_type}' project.", deps_schema, sys_instruct, api_key_input)
                 if res: generated_sow.update(res)
-                progress_bar.progress(45)
+                progress_bar.progress(60)
 
                 # 4. Success Criteria
-                status_text.text("4/7 Defining Success Criteria...")
+                status_text.text("4/6 Defining Success Criteria...")
                 success_schema = {
                     "type": "OBJECT", "properties": {
                         "success_criteria": {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {"heading": {"type": "STRING"}, "points": {"type": "ARRAY", "items": {"type": "STRING"}}}}}
@@ -232,26 +233,12 @@ with tabs[0]:
                 }
                 res = call_gemini_json(f"Generate detailed PoC Success Criteria for '{sol_type}'. Sections: Demonstrations, Results, Usability.", success_schema, sys_instruct, api_key_input)
                 if res: generated_sow.update(res)
-                progress_bar.progress(60)
+                progress_bar.progress(80)
 
-                # 5. Technical Scope
-                status_text.text(f"5/7 Architecting Technical Scope...")
-                scope_schema = {
-                    "type": "OBJECT", "properties": {
-                        "technical_phases": {"type": "OBJECT", "properties": {
-                            "infrastructure_setup": {"type": "ARRAY", "items": {"type": "STRING"}},
-                            "core_workflows": {"type": "ARRAY", "items": {"type": "STRING"}},
-                            "backend_components": {"type": "ARRAY", "items": {"type": "STRING"}},
-                            "feedback_testing": {"type": "ARRAY", "items": {"type": "STRING"}}
-                        }}
-                    }
-                }
-                res = call_gemini_json(f"Write Technical Project Plan for '{sol_type}'. 4 phases: Infrastructure Setup, Create Core Workflows, Backend Components, Feedback & Testing.", scope_schema, sys_instruct, api_key_input)
-                if res: generated_sow.update(res)
-                progress_bar.progress(75)
+                # Skipped Technical Scope generation as per request (handled in Timeline)
 
-                # 6. Architecture
-                status_text.text("6/7 Selecting AWS Services...")
+                # 5. Architecture
+                status_text.text("5/6 Selecting AWS Services...")
                 arch_schema = {
                     "type": "OBJECT", "properties": {
                         "architecture": {"type": "OBJECT", "properties": {
@@ -263,8 +250,8 @@ with tabs[0]:
                 if res: generated_sow.update(res)
                 progress_bar.progress(90)
 
-                # 7. Timeline
-                status_text.text("7/7 Finalizing Timeline...")
+                # 6. Timeline
+                status_text.text("6/6 Finalizing Timeline...")
                 time_schema = {
                     "type": "OBJECT", "properties": {
                         "timeline": {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {"phase": {"type": "STRING"}, "task": {"type": "STRING"}, "weeks": {"type": "STRING"}}}},
@@ -296,26 +283,28 @@ with tabs[1]:
     data["objective"] = final_objective
 
     st.subheader("2.2 STAKEHOLDERS")
-    default_stakeholders = [{"role": "Partner Executive Sponsor", "name": "", "title": "", "email": ""}]
+    # Default without Role
+    default_stakeholders = [{"name": "", "title": "", "email": ""}]
     current_stakeholders = data.get("stakeholders", default_stakeholders)
     
     updated_stakeholders = []
+    # Removed Role Input
     for i, s in enumerate(current_stakeholders):
-        c1, c2, c3, c4 = st.columns([1.5, 1, 1, 1])
-        r = c1.text_input("Role", s.get('role', ''), key=f"s_r_{i}")
-        n = c2.text_input("Name", s.get('name', ''), key=f"s_n_{i}")
-        t = c3.text_input("Title", s.get('title', ''), key=f"s_t_{i}")
-        e = c4.text_input("Email", s.get('email', ''), key=f"s_e_{i}")
-        updated_stakeholders.append({"role": r, "name": n, "title": t, "email": e})
+        c1, c2, c3 = st.columns([1.5, 1.5, 2])
+        n = c1.text_input("Name", s.get('name', ''), key=f"s_n_{i}")
+        t = c2.text_input("Title", s.get('title', ''), key=f"s_t_{i}")
+        e = c3.text_input("Contact/Email", s.get('email', ''), key=f"s_e_{i}")
+        updated_stakeholders.append({"name": n, "title": t, "email": e})
     
     if st.button("+ Add Stakeholder"):
-        updated_stakeholders.append({"role": "New Role", "name": "", "title": "", "email": ""})
+        updated_stakeholders.append({"name": "", "title": "", "email": ""})
         data["stakeholders"] = updated_stakeholders
         st.rerun()
     data["stakeholders"] = updated_stakeholders
 
-# --- TAB 3: SCOPE ---
+# --- TAB 3: DETAILS ---
 with tabs[2]:
+    # Renamed Tab, Removed 'Scope of Work - Technical Project Plan' section
     st.header("2.3 ASSUMPTIONS & DEPENDENCIES")
     col_d, col_a = st.columns(2)
     with col_d:
@@ -337,26 +326,6 @@ with tabs[2]:
         sc_text_build += f"**{item.get('heading', '')}**\n" + "\n".join([f"- {p}" for p in item.get('points', [])]) + "\n\n"
     final_sc_text = st.text_area("Edit Success Criteria", value=sc_text_build, height=300)
 
-    st.divider()
-    st.header("3 SCOPE OF WORK - TECHNICAL PROJECT PLAN")
-    tech_phases = data.get("technical_phases", {})
-    
-    st.subheader("Phase 1: Infrastructure Setup")
-    p1_val = "\n".join(tech_phases.get("infrastructure_setup", [])) if isinstance(tech_phases.get("infrastructure_setup"), list) else tech_phases.get("infrastructure_setup", "")
-    p1 = st.text_area("Tasks", value=p1_val, height=120, key="ph1")
-
-    st.subheader("Phase 2: Create Core Workflows")
-    p2_val = "\n".join(tech_phases.get("core_workflows", [])) if isinstance(tech_phases.get("core_workflows"), list) else tech_phases.get("core_workflows", "")
-    p2 = st.text_area("Tasks", value=p2_val, height=120, key="ph2")
-
-    st.subheader("Phase 3: Backend Components")
-    p3_val = "\n".join(tech_phases.get("backend_components", [])) if isinstance(tech_phases.get("backend_components"), list) else tech_phases.get("backend_components", "")
-    p3 = st.text_area("Tasks", value=p3_val, height=120, key="ph3")
-
-    st.subheader("Phase 4: Feedback & Testing")
-    p4_val = "\n".join(tech_phases.get("feedback_testing", [])) if isinstance(tech_phases.get("feedback_testing"), list) else tech_phases.get("feedback_testing", "")
-    p4 = st.text_area("Tasks", value=p4_val, height=120, key="ph4")
-
 # --- TAB 4: ARCHITECTURE ---
 with tabs[3]:
     st.header("4 SOLUTION ARCHITECTURE")
@@ -371,6 +340,7 @@ with tabs[3]:
 # --- TAB 5: TIMELINE ---
 with tabs[4]:
     st.header("Development Timelines")
+    st.caption("This section serves as the main Technical Project Plan.")
     raw_timeline = data.get("timeline", [{"phase": "Setup", "task": "Init", "weeks": "Wk1"}])
     
     final_timeline = []
@@ -399,7 +369,6 @@ with tabs[5]:
     st.header("Final SOW Export")
     
     # 1. GENERATE WORD DOC (HTML-based)
-    # This creates an HTML file but names it .doc. Word opens this fine, though it may show a warning.
     html_content = f"""
     <html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='[http://www.w3.org/TR/REC-html40](http://www.w3.org/TR/REC-html40)'>
     <head><title>Statement of Work</title>
@@ -428,8 +397,8 @@ with tabs[5]:
     
     <h3>1.2 STAKEHOLDERS</h3>
     <table>
-        <tr><th>Role</th><th>Name</th><th>Title</th><th>Email</th></tr>
-        {"".join([f"<tr><td>{s['role']}</td><td>{s['name']}</td><td>{s['title']}</td><td>{s['email']}</td></tr>" for s in updated_stakeholders])}
+        <tr><th>Name</th><th>Title</th><th>Contact/Email</th></tr>
+        {"".join([f"<tr><td>{s['name']}</td><td>{s['title']}</td><td>{s['email']}</td></tr>" for s in updated_stakeholders])}
     </table>
     
     <h3>1.3 ASSUMPTIONS & DEPENDENCIES</h3>
@@ -449,11 +418,7 @@ with tabs[5]:
     <h3>1.4 PoC SUCCESS CRITERIA</h3>
     <div style="white-space: pre-wrap;">{final_sc_text.replace(chr(10), '<br>')}</div>
     
-    <h2>2. SCOPE OF WORK</h2>
-    <h3>Phase 1: Infrastructure Setup</h3><p>{p1.replace(chr(10), '<br>')}</p>
-    <h3>Phase 2: Core Workflows</h3><p>{p2.replace(chr(10), '<br>')}</p>
-    <h3>Phase 3: Backend Components</h3><p>{p3.replace(chr(10), '<br>')}</p>
-    <h3>Phase 4: Feedback & Testing</h3><p>{p4.replace(chr(10), '<br>')}</p>
+    <h2>2. SCOPE OF WORK & TIMELINES</h2>
     
     <h3>Development Timelines</h3>
     <table>
@@ -501,21 +466,34 @@ with tabs[5]:
                 
                 pdf.set_font('Arial', 'B', 11); pdf.cell(0, 8, "1.2 STAKEHOLDERS", 0, 1)
                 pdf.set_font('Arial', 'B', 9)
-                col_w = [45, 45, 45, 45]
-                pdf.cell(col_w[0], 7, "Role", 1); pdf.cell(col_w[1], 7, "Name", 1); pdf.cell(col_w[2], 7, "Title", 1); pdf.cell(col_w[3], 7, "Email", 1, 1)
+                # Adjusted columns for 3 fields
+                col_w = [60, 60, 60]
+                pdf.cell(col_w[0], 7, "Name", 1); pdf.cell(col_w[1], 7, "Title", 1); pdf.cell(col_w[2], 7, "Contact/Email", 1, 1)
                 pdf.set_font('Arial', '', 9)
                 for s in updated_stakeholders:
-                    pdf.cell(col_w[0], 7, clean_text_pdf(s['role'][:25]), 1)
-                    pdf.cell(col_w[1], 7, clean_text_pdf(s['name'][:25]), 1)
-                    pdf.cell(col_w[2], 7, clean_text_pdf(s['title'][:25]), 1)
-                    pdf.cell(col_w[3], 7, clean_text_pdf(s['email'][:25]), 1, 1)
+                    pdf.cell(col_w[0], 7, clean_text_pdf(s['name'][:35]), 1)
+                    pdf.cell(col_w[1], 7, clean_text_pdf(s['title'][:35]), 1)
+                    pdf.cell(col_w[2], 7, clean_text_pdf(s['email'][:35]), 1, 1)
                 pdf.ln(5)
                 
                 pdf.chapter_title("2. SCOPE OF WORK")
-                pdf.set_font('Arial', 'B', 10); pdf.cell(0, 6, "Phase 1: Infrastructure", 0, 1)
-                pdf.set_font('Arial', '', 10); pdf.multi_cell(0, 5, clean_text_pdf(p1)); pdf.ln(3)
-                pdf.set_font('Arial', 'B', 10); pdf.cell(0, 6, "Phase 2: Workflows", 0, 1)
-                pdf.set_font('Arial', '', 10); pdf.multi_cell(0, 5, clean_text_pdf(p2)); pdf.ln(3)
+                # Removed detailed phase text blocks, relying on timeline logic if needed, 
+                # but for PDF simplistic export, let's just show Architecture and Timeline
+                
+                pdf.set_font('Arial', 'B', 10); pdf.cell(0, 6, "2.1 ARCHITECTURE", 0, 1)
+                pdf.set_font('Arial', '', 10)
+                pdf.multi_cell(0, 5, clean_text_pdf(f"Compute: {compute}\nStorage: {storage}\nML: {ml_services}\nUI: {ui_layer}"))
+                pdf.ln(5)
+
+                pdf.set_font('Arial', 'B', 10); pdf.cell(0, 6, "2.2 TIMELINES", 0, 1)
+                pdf.set_font('Arial', 'B', 9)
+                t_cols = [30, 130, 20]
+                pdf.cell(t_cols[0], 7, "Phase", 1); pdf.cell(t_cols[1], 7, "Task", 1); pdf.cell(t_cols[2], 7, "Wks", 1, 1)
+                pdf.set_font('Arial', '', 9)
+                for t in final_timeline:
+                    pdf.cell(t_cols[0], 7, clean_text_pdf(t['Phase'][:15]), 1)
+                    pdf.cell(t_cols[1], 7, clean_text_pdf(t['Task'][:70]), 1)
+                    pdf.cell(t_cols[2], 7, clean_text_pdf(t['Weeks'][:5]), 1, 1)
                 
                 return pdf.output(dest='S').encode('latin-1')
 
