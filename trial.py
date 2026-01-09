@@ -4,6 +4,7 @@ import time
 import requests
 import pandas as pd
 from datetime import datetime
+from fpdf import FPDF  # Requires: pip install fpdf
 
 # --- CONFIGURATION ---
 ST_PAGE_TITLE = "GenAI SOW Architect"
@@ -30,6 +31,39 @@ INDUSTRIES = [
 
 ENGAGEMENT_TYPES = ["Proof of Concept (PoC)", "Pilot", "MVP", "Production Rollout", "Assessment / Discovery"]
 AWS_ML_SERVICES = ["Amazon Bedrock", "Amazon SageMaker", "Amazon Rekognition", "Amazon Textract", "Amazon Comprehend", "Amazon Transcribe", "Amazon Translate"]
+
+# --- PDF GENERATION CLASS ---
+class PDF(FPDF):
+    def header(self):
+        self.set_font('Arial', 'B', 15)
+        self.cell(0, 10, 'Statement of Work (SOW)', 0, 1, 'C')
+        self.ln(10)
+
+    def footer(self):
+        self.set_y(-15)
+        self.set_font('Arial', 'I', 8)
+        self.cell(0, 10, f'Page {self.page_no()}', 0, 0, 'C')
+
+    def chapter_title(self, title):
+        self.set_font('Arial', 'B', 12)
+        self.set_fill_color(230, 230, 230)
+        self.cell(0, 10, title, 0, 1, 'L', 1)
+        self.ln(4)
+
+    def chapter_body(self, body):
+        self.set_font('Arial', '', 10)
+        self.multi_cell(0, 6, body)
+        self.ln()
+
+def clean_text(text):
+    """Helper to remove/replace characters incompatible with latin-1 PDF encoding."""
+    replacements = {
+        '\u2013': '-', '\u2014': '-', '\u2018': "'", '\u2019': "'", 
+        '\u201c': '"', '\u201d': '"', '●': '-', '•': '-'
+    }
+    for k, v in replacements.items():
+        text = text.replace(k, v)
+    return text.encode('latin-1', 'replace').decode('latin-1')
 
 # --- API UTILITIES ---
 def call_gemini_json(prompt, schema, system_instruction="You are a professional solution architect."):
@@ -102,7 +136,7 @@ tabs = st.tabs([
     "3. Data & Dependencies", 
     "4. Scope & Architecture", 
     "5. Timeline & Costs",
-    "6. Review & Export"
+    "6. Review & Export (PDF)"
 ])
 
 # --- TAB 1: CONTEXT ---
@@ -143,7 +177,8 @@ with tabs[0]:
                     "objective": {"type": "STRING"}
                 }
             }
-            res = call_gemini_json(f"Generate a concise, 1-2 sentence formal business objective for a '{sol_type}' solution for '{customer_name}' in the '{industry}' industry. Mention specific technical outcomes (e.g. 'reduce false positives' for inspection, 'improve semantic relevance' for search).", obj_schema, sys_instruct)
+            # Strictly use sol_type for objective generation
+            res = call_gemini_json(f"Generate a concise, 1-2 sentence formal business objective specifically for a '{sol_type}' solution. Focus on the core value proposition of {sol_type} (e.g. accuracy, automation, speed). Do not reference generic goals.", obj_schema, sys_instruct)
             if res: generated_sow.update(res)
             progress_bar.progress(12)
 
@@ -169,12 +204,11 @@ with tabs[0]:
             
             prompt_stakeholders = f"""
             Generate a list of project stakeholders for a {sol_type} project at {customer_name}. 
-            Must include specific names and titles.
             Required Roles:
-            1. Partner Executive Sponsor: Use exactly "Ram Joshi", Title "Head of Analytics & ML", Email "ram.joshi@oneture.com" (or similar sample).
-            2. Customer Executive Sponsor: Create a realistic name (e.g. "Priya Sharma") and title relevant to {industry} (e.g. "Head of Digital Transformation").
-            3. AWS Executive Sponsor: Create a realistic name (e.g. "Anubhav Sood") and title "AWS Account Executive".
-            4. Project Escalation Contacts: Generate TWO distinct people. One from Partner side (e.g. "Omkar Dhavalikar", "AI/ML Lead") and one from Customer side.
+            1. Partner Executive Sponsor: Name "Ram Joshi", Title "Head of Analytics & ML", Email "ram.joshi@oneture.com".
+            2. Customer Executive Sponsor: Create a realistic name and title relevant to {industry}.
+            3. AWS Executive Sponsor: Create a realistic name and title "AWS Account Executive".
+            4. Project Escalation Contacts: Generate TWO distinct people (Partner & Customer side).
             """
             res = call_gemini_json(prompt_stakeholders, stk_schema, sys_instruct)
             if res: generated_sow.update(res)
@@ -191,9 +225,8 @@ with tabs[0]:
             }
             prompt_deps = f"""
             Generate a list of Assumptions and Dependencies SPECIFIC to a '{sol_type}' project. 
-            - Dependencies: List exactly 6 items. Cover data availability (specific to {sol_type} data), AWS service quotas, API access, and subject matter expert availability.
-            - Assumptions: List exactly 6 items. Cover POC limitations, language support, data quality assumptions, and existing infrastructure.
-            Do NOT use generic text like "Data is available". Be specific: e.g., "High-resolution image datasets labeled with defect classes are available."
+            - Dependencies: List exactly 6 items. Cover data availability (specific to {sol_type} data), AWS quotas, API access, and SME availability.
+            - Assumptions: List exactly 6 items. Cover POC limitations, language/format support, data quality, and existing infra.
             """
             res = call_gemini_json(prompt_deps, deps_schema, sys_instruct)
             if res: generated_sow.update(res)
@@ -218,7 +251,7 @@ with tabs[0]:
                     }
                 }
             }
-            res = call_gemini_json(f"Identify 3 realistic data types required for a '{sol_type}'. E.g., for Visual Inspection use 'Images', for Chatbot use 'PDF Documents'. Provide realistic size (MB/GB) and volume.", data_schema, sys_instruct)
+            res = call_gemini_json(f"Identify 3 realistic data types required for a '{sol_type}'. Provide realistic size (MB/GB) and volume.", data_schema, sys_instruct)
             if res: generated_sow.update(res)
             progress_bar.progress(50)
 
@@ -241,10 +274,9 @@ with tabs[0]:
             }
             prompt_success = f"""
             Generate detailed PoC Success Criteria for a '{sol_type}' solution. 
-            The criteria MUST be technical and measurable.
             Structure:
-            1. Demonstrations: List 3 specific user flows to demo (e.g. "Real-time defect flagging UI").
-            2. Results: List 3 specific metric-based outcomes (e.g. "Accuracy > 90% on validation set", "Latency < 200ms").
+            1. Demonstrations: List 3 specific user flows to demo.
+            2. Results: List 3 specific metric-based outcomes (e.g. Accuracy %, Latency ms).
             3. Usability: List 2 points about user experience.
             """
             res = call_gemini_json(prompt_success, success_schema, sys_instruct)
@@ -269,11 +301,10 @@ with tabs[0]:
             }
             prompt_scope = f"""
             Write a comprehensive Technical Project Plan for a '{sol_type}' project. 
-            The tasks must be technical steps, NOT generic management tasks.
-            1. Infrastructure Setup: AWS services specific to {sol_type} (e.g. Bedrock, SageMaker, OpenSearch).
-            2. Create Core Workflows: Steps for ingestion, processing, and inference specific to {sol_type}.
-            3. Backend Components: APIs, Databases, Vectors, and Logic layers.
-            4. Feedback & Testing: User Acceptance Testing steps.
+            1. Infrastructure Setup: AWS services specific to {sol_type}.
+            2. Create Core Workflows: Ingestion, processing, inference steps.
+            3. Backend Components: APIs, Databases, Logic layers.
+            4. Feedback & Testing: UAT steps.
             """
             res = call_gemini_json(prompt_scope, scope_schema, sys_instruct)
             if res: generated_sow.update(res)
@@ -327,7 +358,7 @@ with tabs[0]:
             st.session_state.autofill_data = generated_sow
             st.session_state.autofill_done = True
             status_text.success("Complete SOW Draft Generated Successfully!")
-            st.toast("Check Tab 6 for the Final Report.")
+            st.toast("Check Tab 6 for the Final PDF Report.")
 
         except Exception as e:
             st.error(f"An error occurred during part-by-part generation: {str(e)}")
@@ -338,16 +369,12 @@ with tabs[1]:
     data = st.session_state.autofill_data
     st.header("2. PROJECT OVERVIEW")
     
-    col_obj, col_refined = st.columns([1, 1])
-    with col_obj:
-        raw_obj = st.text_area("2.1 Business Objective (Input)", placeholder="Refine manual effort, improve ROI...")
-        if st.button("Refine Single Objective"):
-            with st.spinner("Refining..."):
-                sys_instruct = f"You are a specialized Solution Architect for {sol_type}."
-                st.session_state.autofill_data["objective"] = call_gemini_text(f"Refine this into a concise 1-2 sentence formal business objective for {sol_type}: {raw_obj}", sys_instruct)
-    
-    with col_refined:
-        final_objective = st.text_area("2.1 OBJECTIVE (Editable)", value=data.get("objective", ""), height=100)
+    # Auto-generated Objective is displayed here
+    st.subheader("2.1 OBJECTIVE")
+    st.info("This objective is automatically generated based on the Solution Type selected.")
+    final_objective = st.text_area("Edit Objective", value=data.get("objective", ""), height=100)
+    # Update state if edited
+    st.session_state.autofill_data["objective"] = final_objective
 
     st.subheader("2.2 PROJECT SPONSOR(S) / STAKEHOLDER(S) / PROJECT TEAM")
     
@@ -360,9 +387,6 @@ with tabs[1]:
     ]
     
     current_stakeholders = data.get("stakeholders", default_stakeholders)
-    
-    # Display editable table
-    st.info("Edit the stakeholders below. You can modify names, titles, and emails.")
     
     updated_stakeholders = []
     for i, s in enumerate(current_stakeholders):
@@ -476,98 +500,132 @@ with tabs[4]:
 
 # --- TAB 6: REVIEW & EXPORT ---
 with tabs[5]:
-    st.header("Final SOW Report")
+    st.header("Final SOW Report (PDF)")
     
-    doc_markdown = f"""# {sol_type} POC SOW
-**Date:** {datetime.now().strftime('%d %B %Y')}
+    def create_pdf():
+        pdf = PDF()
+        pdf.add_page()
+        
+        # 1. Project Overview
+        pdf.chapter_title("2. PROJECT OVERVIEW")
+        pdf.set_font('Arial', 'B', 11)
+        pdf.cell(0, 8, "2.1 OBJECTIVE", 0, 1)
+        pdf.set_font('Arial', '', 10)
+        pdf.multi_cell(0, 5, clean_text(final_objective))
+        pdf.ln(5)
+        
+        # 2.2 Stakeholders Table
+        pdf.set_font('Arial', 'B', 11)
+        pdf.cell(0, 8, "2.2 PROJECT SPONSOR(S) / STAKEHOLDER(S)", 0, 1)
+        
+        pdf.set_font('Arial', 'B', 10)
+        # Table Header
+        col_w = [40, 50, 50, 50]
+        pdf.cell(col_w[0], 7, "Role", 1)
+        pdf.cell(col_w[1], 7, "Name", 1)
+        pdf.cell(col_w[2], 7, "Title", 1)
+        pdf.cell(col_w[3], 7, "Email", 1, 1)
+        
+        pdf.set_font('Arial', '', 9)
+        for s in updated_stakeholders:
+            pdf.cell(col_w[0], 7, clean_text(s.get('role', '')[:20]), 1)
+            pdf.cell(col_w[1], 7, clean_text(s.get('name', '')[:25]), 1)
+            pdf.cell(col_w[2], 7, clean_text(s.get('title', '')[:25]), 1)
+            pdf.cell(col_w[3], 7, clean_text(s.get('email', '')[:25]), 1, 1)
+        pdf.ln(5)
+        
+        # 2.3 Dependencies
+        pdf.chapter_title("2.3 ASSUMPTIONS & DEPENDENCIES")
+        pdf.set_font('Arial', 'B', 10)
+        pdf.cell(0, 6, "Dependencies:", 0, 1)
+        pdf.set_font('Arial', '', 10)
+        pdf.multi_cell(0, 5, clean_text(deps_text))
+        pdf.ln(3)
+        pdf.set_font('Arial', 'B', 10)
+        pdf.cell(0, 6, "Assumptions:", 0, 1)
+        pdf.set_font('Arial', '', 10)
+        pdf.multi_cell(0, 5, clean_text(assump_text))
+        pdf.ln(5)
+        
+        # 2.4 Success Criteria
+        pdf.chapter_title("2.4 PoC SUCCESS CRITERIA")
+        pdf.multi_cell(0, 5, clean_text(final_sc_text))
+        pdf.ln(5)
+        
+        # 3. Scope of Work
+        pdf.chapter_title("3. SCOPE OF WORK - TECHNICAL PROJECT PLAN")
+        pdf.set_font('Arial', 'B', 10)
+        pdf.cell(0, 6, "Phase 1: Infrastructure Setup", 0, 1)
+        pdf.set_font('Arial', '', 10)
+        pdf.multi_cell(0, 5, clean_text(p1))
+        pdf.ln(2)
+        
+        pdf.set_font('Arial', 'B', 10)
+        pdf.cell(0, 6, "Phase 2: Core Workflows", 0, 1)
+        pdf.set_font('Arial', '', 10)
+        pdf.multi_cell(0, 5, clean_text(p2))
+        pdf.ln(2)
+        
+        pdf.set_font('Arial', 'B', 10)
+        pdf.cell(0, 6, "Phase 3: Backend Components", 0, 1)
+        pdf.set_font('Arial', '', 10)
+        pdf.multi_cell(0, 5, clean_text(p3))
+        pdf.ln(2)
+        
+        pdf.set_font('Arial', 'B', 10)
+        pdf.cell(0, 6, "Phase 4: Feedback & Testing", 0, 1)
+        pdf.set_font('Arial', '', 10)
+        pdf.multi_cell(0, 5, clean_text(p4))
+        pdf.ln(5)
+        
+        # Timeline Table
+        pdf.set_font('Arial', 'B', 10)
+        pdf.cell(0, 8, "Development Timelines", 0, 1)
+        t_col_w = [40, 110, 40]
+        pdf.cell(t_col_w[0], 7, "Phase", 1)
+        pdf.cell(t_col_w[1], 7, "Task", 1)
+        pdf.cell(t_col_w[2], 7, "Weeks", 1, 1)
+        
+        pdf.set_font('Arial', '', 9)
+        for t in final_timeline:
+            pdf.cell(t_col_w[0], 7, clean_text(t['Phase'][:20]), 1)
+            pdf.cell(t_col_w[1], 7, clean_text(t['Task'][:60]), 1)
+            pdf.cell(t_col_w[2], 7, clean_text(t['Weeks'][:20]), 1, 1)
+        pdf.ln(5)
+        
+        # 4. Architecture
+        pdf.chapter_title("4. SOLUTION ARCHITECTURE")
+        pdf.set_font('Arial', '', 10)
+        pdf.cell(0, 6, f"Compute: {clean_text(str(compute))}", 0, 1)
+        pdf.cell(0, 6, f"Storage: {clean_text(', '.join(storage))}", 0, 1)
+        pdf.cell(0, 6, f"ML Services: {clean_text(', '.join(ml_services))}", 0, 1)
+        pdf.cell(0, 6, f"UI Layer: {clean_text(str(ui_layer))}", 0, 1)
+        pdf.ln(5)
+        
+        # 5. Resources
+        pdf.chapter_title("5. RESOURCES & COST ESTIMATES")
+        pdf.cell(0, 6, f"Cost Ownership: {clean_text(ownership)}", 0, 1)
+        pdf.cell(0, 6, f"Usage Estimates: {n_users} users, {n_reqs} requests/day", 0, 1)
+        
+        return pdf.output(dest='S').encode('latin-1')
 
----
+    # Preview Text
+    st.markdown("### Preview (Text Version)")
+    st.text_area("Objective", value=final_objective, disabled=True)
+    st.write("---")
+    st.write("Click below to download the official PDF.")
 
-# 2 PROJECT OVERVIEW
-
-## 2.1 OBJECTIVE
-{data.get('objective', 'TBD')}
-
-## 2.2 PROJECT SPONSOR(S) / STAKEHOLDER(S) / PROJECT TEAM
-| Role | Name | Title | Email/Contact Info |
-|---|---|---|---|
-"""
-    for s in updated_stakeholders:
-        doc_markdown += f"| {s.get('role', '')} | {s.get('name', '')} | {s.get('title', '')} | {s.get('email', '')} |\n"
-
-    doc_markdown += f"""
-## 2.3 ASSUMPTIONS & DEPENDENCIES
-
-**Dependencies:**
-"""
-    for d in deps_text.split('\n'):
-        if d.strip(): doc_markdown += f"- {d.strip()}\n"
-
-    doc_markdown += "\n**Assumptions:**\n"
-    for a in assump_text.split('\n'):
-        if a.strip(): doc_markdown += f"- {a.strip()}\n"
-
-    doc_markdown += f"""
-## 2.4 PoC Success Criteria
-{final_sc_text}
-
----
-
-# 3 SCOPE OF WORK - TECHNICAL PROJECT PLAN
-
-**Phase 1: Infrastructure Setup**
-"""
-    for line in p1.split('\n'):
-        if line.strip(): doc_markdown += f"- {line.strip()}\n"
-
-    doc_markdown += "\n**Phase 2: Create Core Workflows**\n"
-    for line in p2.split('\n'):
-        if line.strip(): doc_markdown += f"- {line.strip()}\n"
-
-    doc_markdown += "\n**Phase 3: Backend Components**\n"
-    for line in p3.split('\n'):
-        if line.strip(): doc_markdown += f"- {line.strip()}\n"
-
-    doc_markdown += "\n**Phase 4: Feedback & Testing**\n"
-    for line in p4.split('\n'):
-        if line.strip(): doc_markdown += f"- {line.strip()}\n"
-
-    doc_markdown += f"""
-### Development Timelines
-| Phase | Task | Timeline |
-|---|---|---|
-"""
-    for t in final_timeline:
-        doc_markdown += f"| {t['Phase']} | {t['Task']} | {t['Weeks']} |\n"
-
-    doc_markdown += f"""
----
-
-# 4 SOLUTION ARCHITECTURE / ARCHITECTURAL DIAGRAM
-- **Compute:** {compute}
-- **Storage:** {', '.join(storage)}
-- **ML Services:** {', '.join(ml_services)}
-- **UI:** {ui_layer}
-
-*(Architecture diagram to be inserted here)*
-
----
-
-# 5 RESOURCES & COST ESTIMATES
-- **Cost Ownership:** {ownership}
-- **Usage Estimates:** {n_users} users, {n_reqs} requests/day.
-- **Infrastructure Costs:** (Calculated via AWS Pricing Calculator)
-"""
-
-    st.markdown(doc_markdown)
-    
-    st.download_button(
-        label="📥 Download SOW Document (.md)",
-        data=doc_markdown,
-        file_name=f"{customer_name.replace(' ', '_')}_{sol_type.replace(' ', '_')}_SOW.md",
-        mime="text/markdown"
-    )
-
-st.sidebar.markdown(f"**Current Solution:**\n{sol_type}")
-st.sidebar.markdown(f"**Target Industry:**\n{industry}")
-st.sidebar.info("Generation Updated: Now enforces high specificity to the selected solution.")
+    if st.session_state.autofill_done:
+        try:
+            pdf_bytes = create_pdf()
+            st.download_button(
+                label="📥 Download SOW (PDF)",
+                data=pdf_bytes,
+                file_name=f"{customer_name.replace(' ', '_')}_SOW.pdf",
+                mime="application/pdf"
+            )
+        except Exception as e:
+            st.error(f"Error generating PDF: {e}. Make sure 'fpdf' is installed.")
+            st.info("pip install fpdf")
+    else:
+        st.warning("Please generate the SOW in Tab 1 first.")
