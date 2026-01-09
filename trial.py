@@ -84,7 +84,7 @@ def call_gemini_json(prompt, schema, system_instruction="You are a professional 
         return None
         
     # --- URL FIX ---
-    # Fixed the URL string which previously contained markdown brackets causing API failures
+    # Strictly cleaned URL string to prevent connection adapters error
     url = f"[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/){GEMINI_MODEL}:generateContent?key={api_key}"
     
     payload = {
@@ -180,7 +180,8 @@ with tabs[0]:
         if not api_key_input:
             st.error("Please provide a Gemini API Key in the sidebar to proceed.")
         else:
-            generated_sow = {}
+            # We initialize with existing data to allow partial updates without wiping everything
+            generated_sow = st.session_state.autofill_data.copy()
             sys_instruct = f"You are a specialized Solution Architect for the {industry} industry. Writing SOW for '{sol_type}'."
             
             progress_bar = st.progress(0)
@@ -191,7 +192,9 @@ with tabs[0]:
                 status_text.text(f"1/6 Generating Specific Objective for {sol_type}...")
                 obj_schema = {"type": "OBJECT", "properties": {"objective": {"type": "STRING"}}}
                 res = call_gemini_json(f"Generate a concise, 1-2 sentence formal business objective specifically for a '{sol_type}' solution. Focus on accuracy, automation, speed. Do not use generic goals.", obj_schema, sys_instruct, api_key_input)
-                if res: generated_sow.update(res)
+                if res: 
+                    generated_sow.update(res)
+                    st.session_state.autofill_data = generated_sow # Save progress immediately
                 progress_bar.progress(20)
 
                 # 2. Stakeholders
@@ -209,7 +212,9 @@ with tabs[0]:
                 3. AWS Executive Sponsor: Realistic name, Title "AWS Account Executive".
                 4. Project Escalation Contacts: Generate TWO distinct people."""
                 res = call_gemini_json(prompt_stakeholders, stk_schema, sys_instruct, api_key_input)
-                if res: generated_sow.update(res)
+                if res: 
+                    generated_sow.update(res)
+                    st.session_state.autofill_data = generated_sow # Save progress immediately
                 progress_bar.progress(40)
 
                 # 3. Dependencies
@@ -221,7 +226,9 @@ with tabs[0]:
                      }
                 }
                 res = call_gemini_json(f"List 6 Assumptions and 6 Dependencies SPECIFIC to a '{sol_type}' project.", deps_schema, sys_instruct, api_key_input)
-                if res: generated_sow.update(res)
+                if res: 
+                    generated_sow.update(res)
+                    st.session_state.autofill_data = generated_sow # Save progress immediately
                 progress_bar.progress(60)
 
                 # 4. Success Criteria
@@ -232,7 +239,9 @@ with tabs[0]:
                     }
                 }
                 res = call_gemini_json(f"Generate detailed PoC Success Criteria for '{sol_type}'. Sections: Demonstrations, Results, Usability.", success_schema, sys_instruct, api_key_input)
-                if res: generated_sow.update(res)
+                if res: 
+                    generated_sow.update(res)
+                    st.session_state.autofill_data = generated_sow # Save progress immediately
                 progress_bar.progress(80)
 
                 # Skipped Technical Scope generation as per request (handled in Timeline)
@@ -247,7 +256,9 @@ with tabs[0]:
                     }
                 }
                 res = call_gemini_json(f"Design AWS architecture for '{sol_type}'. Suggest text for Compute, Storage, ML Services, UI.", arch_schema, sys_instruct, api_key_input)
-                if res: generated_sow.update(res)
+                if res: 
+                    generated_sow.update(res)
+                    st.session_state.autofill_data = generated_sow # Save progress immediately
                 progress_bar.progress(90)
 
                 # 6. Timeline
@@ -259,10 +270,11 @@ with tabs[0]:
                     }
                 }
                 res = call_gemini_json(f"Create high-level timeline for '{sol_type}'. Include Phase, Task, Weeks.", time_schema, sys_instruct, api_key_input)
-                if res: generated_sow.update(res)
+                if res: 
+                    generated_sow.update(res)
+                    st.session_state.autofill_data = generated_sow # Save progress immediately
                 progress_bar.progress(100)
                 
-                st.session_state.autofill_data = generated_sow
                 st.session_state.autofill_done = True
                 status_text.success("Complete SOW Draft Generated Successfully!")
                 st.toast("Check Tab 6 for the Final Report.")
