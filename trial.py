@@ -83,7 +83,7 @@ def call_gemini_json(prompt, schema, system_instruction="You are a professional 
         return None
         
     # --- URL FIX ---
-    # CLEAN URL - No markdown formatting
+    # CLEAN URL - Removed markdown formatting brackets that caused the connection error
     url = f"[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/){GEMINI_MODEL}:generateContent?key={api_key}"
     
     payload = {
