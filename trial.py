@@ -32,13 +32,14 @@ ENGAGEMENT_TYPES = ["Proof of Concept (PoC)", "Pilot", "MVP", "Production Rollou
 AWS_ML_SERVICES = ["Amazon Bedrock", "Amazon SageMaker", "Amazon Rekognition", "Amazon Textract", "Amazon Comprehend", "Amazon Transcribe", "Amazon Translate"]
 
 # --- API UTILITIES ---
-def call_gemini_json(prompt, schema):
+def call_gemini_json(prompt, schema, system_instruction="You are a professional solution architect."):
     """Calls Gemini with a structured JSON output requirement."""
     api_key = "" # Provided by environment
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={api_key}"
     
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
+        "systemInstruction": {"parts": [{"text": system_instruction}]},
         "generationConfig": {
             "responseMimeType": "application/json",
             "responseSchema": schema
@@ -126,20 +127,23 @@ with tabs[0]:
         # Initialize dictionary to hold all parts
         generated_sow = {}
         
+        # System instruction for high specificity
+        sys_instruct = f"You are a specialized Solution Architect for the {industry} industry. You are writing a Statement of Work for a '{sol_type}' solution. All content generated MUST be highly specific to '{sol_type}'. Do NOT use generic project management boilerplate. Use technical terms relevant to {sol_type}."
+        
         # Progress status bar
         progress_bar = st.progress(0)
         status_text = st.empty()
         
         try:
             # 1. Objective
-            status_text.text("1/8 Generating Concise Project Objective...")
+            status_text.text(f"1/8 Generating Specific Objective for {sol_type}...")
             obj_schema = {
                 "type": "OBJECT",
                 "properties": {
                     "objective": {"type": "STRING"}
                 }
             }
-            res = call_gemini_json(f"Generate a concise, 1-2 sentence formal business objective for a '{sol_type}' solution for '{customer_name}' in the '{industry}' industry. Engagement: {engagement}.", obj_schema)
+            res = call_gemini_json(f"Generate a concise, 1-2 sentence formal business objective for a '{sol_type}' solution for '{customer_name}' in the '{industry}' industry. Mention specific technical outcomes (e.g. 'reduce false positives' for inspection, 'improve semantic relevance' for search).", obj_schema, sys_instruct)
             if res: generated_sow.update(res)
             progress_bar.progress(12)
 
@@ -165,18 +169,19 @@ with tabs[0]:
             
             prompt_stakeholders = f"""
             Generate a list of project stakeholders for a {sol_type} project at {customer_name}. 
-            Must include at least one entry for EACH of the following roles:
-            1. Partner Executive Sponsor (Use sample: Gaurav Kankaria, Head of Analytics & ML, Gaurav.kankaria@oneture.com)
-            2. Customer Executive Sponsor (Create a realistic sample name/title)
-            3. AWS Executive Sponsor (Create a realistic sample name/title)
-            4. Project Escalation Contacts (Include at least 2 contacts, e.g., Omkar Dhavalikar - AI/ML Lead)
+            Must include specific names and titles.
+            Required Roles:
+            1. Partner Executive Sponsor: Use exactly "Ram Joshi", Title "Head of Analytics & ML", Email "ram.joshi@oneture.com" (or similar sample).
+            2. Customer Executive Sponsor: Create a realistic name (e.g. "Priya Sharma") and title relevant to {industry} (e.g. "Head of Digital Transformation").
+            3. AWS Executive Sponsor: Create a realistic name (e.g. "Anubhav Sood") and title "AWS Account Executive".
+            4. Project Escalation Contacts: Generate TWO distinct people. One from Partner side (e.g. "Omkar Dhavalikar", "AI/ML Lead") and one from Customer side.
             """
-            res = call_gemini_json(prompt_stakeholders, stk_schema)
+            res = call_gemini_json(prompt_stakeholders, stk_schema, sys_instruct)
             if res: generated_sow.update(res)
             progress_bar.progress(25)
 
             # 3. Dependencies & Assumptions
-            status_text.text("3/8 Generating Assumptions & Dependencies...")
+            status_text.text(f"3/8 Generating Specific Dependencies for {sol_type}...")
             deps_schema = {
                  "type": "OBJECT",
                  "properties": {
@@ -184,7 +189,13 @@ with tabs[0]:
                      "assumptions": {"type": "ARRAY", "items": {"type": "STRING"}}
                  }
             }
-            res = call_gemini_json(f"Generate a list of 4-6 specific Assumptions and 4-6 specific Dependencies for a {sol_type} project. Dependencies should cover data access, AWS environment, design guidelines, and input quality.", deps_schema)
+            prompt_deps = f"""
+            Generate a list of Assumptions and Dependencies SPECIFIC to a '{sol_type}' project. 
+            - Dependencies: List exactly 6 items. Cover data availability (specific to {sol_type} data), AWS service quotas, API access, and subject matter expert availability.
+            - Assumptions: List exactly 6 items. Cover POC limitations, language support, data quality assumptions, and existing infrastructure.
+            Do NOT use generic text like "Data is available". Be specific: e.g., "High-resolution image datasets labeled with defect classes are available."
+            """
+            res = call_gemini_json(prompt_deps, deps_schema, sys_instruct)
             if res: generated_sow.update(res)
             progress_bar.progress(37)
 
@@ -207,12 +218,12 @@ with tabs[0]:
                     }
                 }
             }
-            res = call_gemini_json(f"Identify 2-3 realistic data types and volumes required for a '{sol_type}' implementation in the '{industry}' sector.", data_schema)
+            res = call_gemini_json(f"Identify 3 realistic data types required for a '{sol_type}'. E.g., for Visual Inspection use 'Images', for Chatbot use 'PDF Documents'. Provide realistic size (MB/GB) and volume.", data_schema, sys_instruct)
             if res: generated_sow.update(res)
             progress_bar.progress(50)
 
             # 5. Success Criteria
-            status_text.text("5/8 Defining Detailed Success Criteria...")
+            status_text.text("5/8 Defining Technical Success Criteria...")
             success_schema = {
                 "type": "OBJECT",
                 "properties": {
@@ -229,16 +240,19 @@ with tabs[0]:
                 }
             }
             prompt_success = f"""
-            Generate detailed PoC Success Criteria for a '{sol_type}'. 
-            Structure it with headings like 'Demonstrations', 'Results', 'Accurate Compliance Validation', 'Usability', etc.
-            Under each heading, provide specific, measurable outcomes as bullet points.
+            Generate detailed PoC Success Criteria for a '{sol_type}' solution. 
+            The criteria MUST be technical and measurable.
+            Structure:
+            1. Demonstrations: List 3 specific user flows to demo (e.g. "Real-time defect flagging UI").
+            2. Results: List 3 specific metric-based outcomes (e.g. "Accuracy > 90% on validation set", "Latency < 200ms").
+            3. Usability: List 2 points about user experience.
             """
-            res = call_gemini_json(prompt_success, success_schema)
+            res = call_gemini_json(prompt_success, success_schema, sys_instruct)
             if res: generated_sow.update(res)
             progress_bar.progress(62)
 
             # 6. Technical Scope
-            status_text.text("6/8 Architecting Technical Scope...")
+            status_text.text(f"6/8 Architecting Technical Scope for {sol_type}...")
             scope_schema = {
                 "type": "OBJECT",
                 "properties": {
@@ -255,14 +269,13 @@ with tabs[0]:
             }
             prompt_scope = f"""
             Write a comprehensive Technical Project Plan for a '{sol_type}' project. 
-            Break it down into these exact 4 phases:
-            1. Infrastructure Setup (AWS services, access)
-            2. Create Core Workflows (Ingestion, Validation, Processing, Scoring)
-            3. Backend Components (Compliance engine, Tagging module, Storage)
-            4. Feedback & Testing (UI demo, Validations, User feedback)
-            For each phase, list specific technical tasks.
+            The tasks must be technical steps, NOT generic management tasks.
+            1. Infrastructure Setup: AWS services specific to {sol_type} (e.g. Bedrock, SageMaker, OpenSearch).
+            2. Create Core Workflows: Steps for ingestion, processing, and inference specific to {sol_type}.
+            3. Backend Components: APIs, Databases, Vectors, and Logic layers.
+            4. Feedback & Testing: User Acceptance Testing steps.
             """
-            res = call_gemini_json(prompt_scope, scope_schema)
+            res = call_gemini_json(prompt_scope, scope_schema, sys_instruct)
             if res: generated_sow.update(res)
             progress_bar.progress(75)
 
@@ -282,7 +295,7 @@ with tabs[0]:
                     }
                 }
             }
-            res = call_gemini_json(f"Design an AWS architecture for '{sol_type}'. Suggest compute, storage, Bedrock/SageMaker services, and UI layer.", arch_schema)
+            res = call_gemini_json(f"Design an AWS architecture for '{sol_type}'. Suggest best-practice Compute, Storage, and AI Services.", arch_schema, sys_instruct)
             if res: generated_sow.update(res)
             progress_bar.progress(87)
 
@@ -306,7 +319,7 @@ with tabs[0]:
                     "usage_requests": {"type": "NUMBER"}
                 }
             }
-            res = call_gemini_json(f"Create a high-level timeline for a '{engagement}' of a '{sol_type}'. Include Phase, Task Description, and Week duration (e.g. Wk1-Wk2).", time_schema)
+            res = call_gemini_json(f"Create a high-level timeline for a '{engagement}' of a '{sol_type}'. Include Phase, Task Description, and Week duration (e.g. Wk1-Wk2).", time_schema, sys_instruct)
             if res: generated_sow.update(res)
             progress_bar.progress(100)
             
@@ -330,7 +343,8 @@ with tabs[1]:
         raw_obj = st.text_area("2.1 Business Objective (Input)", placeholder="Refine manual effort, improve ROI...")
         if st.button("Refine Single Objective"):
             with st.spinner("Refining..."):
-                st.session_state.autofill_data["objective"] = call_gemini_text(f"Refine this into a concise 1-2 sentence formal business objective: {raw_obj}")
+                sys_instruct = f"You are a specialized Solution Architect for {sol_type}."
+                st.session_state.autofill_data["objective"] = call_gemini_text(f"Refine this into a concise 1-2 sentence formal business objective for {sol_type}: {raw_obj}", sys_instruct)
     
     with col_refined:
         final_objective = st.text_area("2.1 OBJECTIVE (Editable)", value=data.get("objective", ""), height=100)
@@ -339,7 +353,7 @@ with tabs[1]:
     
     # Defaults if empty
     default_stakeholders = [
-        {"role": "Partner Executive Sponsor", "name": "Gaurav Kankaria", "title": "Head of Analytics & ML", "email": "Gaurav.kankaria@oneture.com"},
+        {"role": "Partner Executive Sponsor", "name": "Ram Joshi", "title": "Head of Analytics & ML", "email": "ram.joshi@oneture.com"},
         {"role": "Customer Executive Sponsor", "name": "TBD", "title": "Head of Product", "email": "client@example.com"},
         {"role": "AWS Executive Sponsor", "name": "Anubhav Sood", "title": "AWS Account Executive", "email": "anbhsood@amazon.com"},
         {"role": "Project Escalation Contacts", "name": "Omkar Dhavalikar", "title": "AI/ML Lead", "email": "omkar.dhavalikar@oneture.com"}
@@ -350,8 +364,6 @@ with tabs[1]:
     # Display editable table
     st.info("Edit the stakeholders below. You can modify names, titles, and emails.")
     
-    # Convert to DataFrame for easier editing in Streamlit if desired, or simple input loop
-    # Using columns for cleaner layout
     updated_stakeholders = []
     for i, s in enumerate(current_stakeholders):
         st.markdown(f"**{s.get('role', 'Stakeholder')}**")
@@ -361,7 +373,6 @@ with tabs[1]:
         e = c3.text_input("Email", s.get('email', ''), key=f"s_e_{i}")
         updated_stakeholders.append({"role": s.get('role'), "name": n, "title": t, "email": e})
     
-    # Allow adding a new stakeholder manually
     if st.button("+ Add Stakeholder"):
         updated_stakeholders.append({"role": "New Role", "name": "", "title": "", "email": ""})
         st.session_state.autofill_data["stakeholders"] = updated_stakeholders
@@ -559,4 +570,4 @@ with tabs[5]:
 
 st.sidebar.markdown(f"**Current Solution:**\n{sol_type}")
 st.sidebar.markdown(f"**Target Industry:**\n{industry}")
-st.sidebar.info("Generation updated to match Nykaa SOW format.")
+st.sidebar.info("Generation Updated: Now enforces high specificity to the selected solution.")
