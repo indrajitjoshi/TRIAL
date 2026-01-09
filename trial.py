@@ -4,7 +4,12 @@ import time
 import requests
 import pandas as pd
 from datetime import datetime
-from fpdf import FPDF  # Requires: pip install fpdf
+
+# Try importing FPDF, handle if missing
+try:
+    from fpdf import FPDF
+except ImportError:
+    FPDF = None
 
 # --- CONFIGURATION ---
 ST_PAGE_TITLE = "GenAI SOW Architect"
@@ -33,30 +38,37 @@ ENGAGEMENT_TYPES = ["Proof of Concept (PoC)", "Pilot", "MVP", "Production Rollou
 AWS_ML_SERVICES = ["Amazon Bedrock", "Amazon SageMaker", "Amazon Rekognition", "Amazon Textract", "Amazon Comprehend", "Amazon Transcribe", "Amazon Translate"]
 
 # --- PDF GENERATION CLASS ---
-class PDF(FPDF):
-    def header(self):
-        self.set_font('Arial', 'B', 15)
-        self.cell(0, 10, 'Statement of Work (SOW)', 0, 1, 'C')
-        self.ln(10)
+if FPDF:
+    class PDF(FPDF):
+        def header(self):
+            self.set_font('Arial', 'B', 15)
+            self.cell(0, 10, 'Statement of Work (SOW)', 0, 1, 'C')
+            self.ln(10)
 
-    def footer(self):
-        self.set_y(-15)
-        self.set_font('Arial', 'I', 8)
-        self.cell(0, 10, f'Page {self.page_no()}', 0, 0, 'C')
+        def footer(self):
+            self.set_y(-15)
+            self.set_font('Arial', 'I', 8)
+            self.cell(0, 10, f'Page {self.page_no()}', 0, 0, 'C')
 
-    def chapter_title(self, title):
-        self.set_font('Arial', 'B', 12)
-        self.set_fill_color(230, 230, 230)
-        self.cell(0, 10, title, 0, 1, 'L', 1)
-        self.ln(4)
+        def chapter_title(self, title):
+            self.set_font('Arial', 'B', 12)
+            self.set_fill_color(230, 230, 230)
+            self.cell(0, 10, title, 0, 1, 'L', 1)
+            self.ln(4)
 
-    def chapter_body(self, body):
-        self.set_font('Arial', '', 10)
-        self.multi_cell(0, 6, body)
-        self.ln()
+        def chapter_body(self, body):
+            self.set_font('Arial', '', 10)
+            self.multi_cell(0, 6, body)
+            self.ln()
+else:
+    # Dummy class to prevent NameError if FPDF missing
+    class PDF:
+        pass
 
 def clean_text(text):
     """Helper to remove/replace characters incompatible with latin-1 PDF encoding."""
+    if not isinstance(text, str):
+        return str(text)
     replacements = {
         '\u2013': '-', '\u2014': '-', '\u2018': "'", '\u2019': "'", 
         '\u201c': '"', '\u201d': '"', '●': '-', '•': '-'
@@ -130,6 +142,18 @@ st.set_page_config(page_title=ST_PAGE_TITLE, page_icon=ST_PAGE_ICON, layout="wid
 st.title(f"{ST_PAGE_ICON} {ST_PAGE_TITLE}")
 st.markdown("Create end-to-end professional SOWs tailored to specific AWS GenAI solutions.")
 
+# Initialize variables to avoid NameError in create_pdf if tabs assume sequential execution
+final_objective = ""
+updated_stakeholders = []
+deps_text = ""
+assump_text = ""
+final_sc_text = ""
+p1, p2, p3, p4 = "", "", "", ""
+final_timeline = []
+compute, ui_layer = "", ""
+storage, ml_services = [], []
+ownership, n_users, n_reqs = "", 0, 0
+
 tabs = st.tabs([
     "1. High-Level Context", 
     "2. Project Overview", 
@@ -177,7 +201,6 @@ with tabs[0]:
                     "objective": {"type": "STRING"}
                 }
             }
-            # Strictly use sol_type for objective generation
             res = call_gemini_json(f"Generate a concise, 1-2 sentence formal business objective specifically for a '{sol_type}' solution. Focus on the core value proposition of {sol_type} (e.g. accuracy, automation, speed). Do not reference generic goals.", obj_schema, sys_instruct)
             if res: generated_sow.update(res)
             progress_bar.progress(12)
@@ -503,6 +526,8 @@ with tabs[5]:
     st.header("Final SOW Report (PDF)")
     
     def create_pdf():
+        if not FPDF:
+            return None
         pdf = PDF()
         pdf.add_page()
         
@@ -607,6 +632,8 @@ with tabs[5]:
         pdf.cell(0, 6, f"Cost Ownership: {clean_text(ownership)}", 0, 1)
         pdf.cell(0, 6, f"Usage Estimates: {n_users} users, {n_reqs} requests/day", 0, 1)
         
+        # Return string/bytes based on available method. Standard pyfpdf returns str in python 3 which is latin-1 encoded mostly.
+        # We re-encode to be sure for st.download_button
         return pdf.output(dest='S').encode('latin-1')
 
     # Preview Text
@@ -616,16 +643,21 @@ with tabs[5]:
     st.write("Click below to download the official PDF.")
 
     if st.session_state.autofill_done:
-        try:
-            pdf_bytes = create_pdf()
-            st.download_button(
-                label="📥 Download SOW (PDF)",
-                data=pdf_bytes,
-                file_name=f"{customer_name.replace(' ', '_')}_SOW.pdf",
-                mime="application/pdf"
-            )
-        except Exception as e:
-            st.error(f"Error generating PDF: {e}. Make sure 'fpdf' is installed.")
-            st.info("pip install fpdf")
+        if FPDF:
+            try:
+                pdf_bytes = create_pdf()
+                if pdf_bytes:
+                    st.download_button(
+                        label="📥 Download SOW (PDF)",
+                        data=pdf_bytes,
+                        file_name=f"{customer_name.replace(' ', '_')}_SOW.pdf",
+                        mime="application/pdf"
+                    )
+                else:
+                    st.error("Failed to generate PDF bytes.")
+            except Exception as e:
+                st.error(f"Error generating PDF: {e}")
+        else:
+            st.warning("FPDF library is not installed. Please install it to generate PDF.")
     else:
         st.warning("Please generate the SOW in Tab 1 first.")
