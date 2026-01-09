@@ -14,7 +14,6 @@ except ImportError:
 # --- CONFIGURATION ---
 ST_PAGE_TITLE = "GenAI SOW Architect"
 ST_PAGE_ICON = "📄"
-# GEMINI_MODEL = "gemini-2.5-flash-preview-09-2025" 
 # Note: Use a standard stable model name if the preview model is unavailable in your region.
 GEMINI_MODEL = "gemini-2.0-flash-exp" 
 
@@ -84,7 +83,7 @@ def call_gemini_json(prompt, schema, system_instruction="You are a professional 
         return None
         
     # --- URL FIX ---
-    # Strictly cleaned URL string to prevent connection adapters error
+    # CLEAN URL - No markdown formatting
     url = f"[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/){GEMINI_MODEL}:generateContent?key={api_key}"
     
     payload = {
@@ -98,9 +97,11 @@ def call_gemini_json(prompt, schema, system_instruction="You are a professional 
     
     headers = {"Content-Type": "application/json"}
     
-    for i in range(3): # Reduced retries for faster feedback
+    for i in range(3): # Retry logic
         try:
-            response = requests.post(url, json=payload, headers=headers, timeout=30)
+            # Increased timeout to 60s to ensure completion for complex sections
+            response = requests.post(url, json=payload, headers=headers, timeout=60)
+            
             if response.status_code == 200:
                 result = response.json()
                 try:
@@ -108,14 +109,18 @@ def call_gemini_json(prompt, schema, system_instruction="You are a professional 
                     cleaned_text = clean_json_string(text_content)
                     return json.loads(cleaned_text)
                 except (IndexError, json.JSONDecodeError):
-                    # Fallback if structure is unexpected
-                    return None
+                    st.warning(f"Formatting error in section attempt {i+1}. Retrying...")
+                    time.sleep(1)
+                    continue
             else:
-                # Log error for debugging if needed (but keep UI clean)
-                print(f"API Error {response.status_code}: {response.text}")
-                time.sleep(1)
+                # Log specific API errors to help debugging
+                if i == 2: # Only show error on final failure
+                    st.error(f"API Error {response.status_code}: {response.text[:200]}")
+                time.sleep(2)
         except Exception as e:
-            time.sleep(1)
+            if i == 2:
+                st.error(f"Connection Error: {str(e)}")
+            time.sleep(2)
             
     return None
 
@@ -134,7 +139,6 @@ with st.sidebar:
     api_key_input = st.text_input("Gemini API Key", type="password", help="Enter your Google Gemini API Key here.")
     
     # Check environment variable if input is empty
-    # Checks for both GEMINI_API_KEY and GOOGLE_API_KEY
     if not api_key_input:
         api_key_input = os.environ.get("GEMINI_API_KEY", "")
     if not api_key_input:
@@ -189,12 +193,15 @@ with tabs[0]:
             
             try:
                 # 1. Objective
+                # Check if objective is already manually entered by user in the text area (stored in session state)
+                # If so, we can optionally respect it, but typically a "Generate" button implies a fresh start.
+                # However, to support "rest of content", we will generate it, but users can edit later.
                 status_text.text(f"1/6 Generating Specific Objective for {sol_type}...")
                 obj_schema = {"type": "OBJECT", "properties": {"objective": {"type": "STRING"}}}
                 res = call_gemini_json(f"Generate a concise, 1-2 sentence formal business objective specifically for a '{sol_type}' solution. Focus on accuracy, automation, speed. Do not use generic goals.", obj_schema, sys_instruct, api_key_input)
                 if res: 
                     generated_sow.update(res)
-                    st.session_state.autofill_data = generated_sow # Save progress immediately
+                    st.session_state.autofill_data = generated_sow
                 progress_bar.progress(20)
 
                 # 2. Stakeholders
@@ -214,7 +221,7 @@ with tabs[0]:
                 res = call_gemini_json(prompt_stakeholders, stk_schema, sys_instruct, api_key_input)
                 if res: 
                     generated_sow.update(res)
-                    st.session_state.autofill_data = generated_sow # Save progress immediately
+                    st.session_state.autofill_data = generated_sow
                 progress_bar.progress(40)
 
                 # 3. Dependencies
@@ -228,7 +235,7 @@ with tabs[0]:
                 res = call_gemini_json(f"List 6 Assumptions and 6 Dependencies SPECIFIC to a '{sol_type}' project.", deps_schema, sys_instruct, api_key_input)
                 if res: 
                     generated_sow.update(res)
-                    st.session_state.autofill_data = generated_sow # Save progress immediately
+                    st.session_state.autofill_data = generated_sow
                 progress_bar.progress(60)
 
                 # 4. Success Criteria
@@ -241,10 +248,8 @@ with tabs[0]:
                 res = call_gemini_json(f"Generate detailed PoC Success Criteria for '{sol_type}'. Sections: Demonstrations, Results, Usability.", success_schema, sys_instruct, api_key_input)
                 if res: 
                     generated_sow.update(res)
-                    st.session_state.autofill_data = generated_sow # Save progress immediately
+                    st.session_state.autofill_data = generated_sow
                 progress_bar.progress(80)
-
-                # Skipped Technical Scope generation as per request (handled in Timeline)
 
                 # 5. Architecture
                 status_text.text("5/6 Selecting AWS Services...")
@@ -258,7 +263,7 @@ with tabs[0]:
                 res = call_gemini_json(f"Design AWS architecture for '{sol_type}'. Suggest text for Compute, Storage, ML Services, UI.", arch_schema, sys_instruct, api_key_input)
                 if res: 
                     generated_sow.update(res)
-                    st.session_state.autofill_data = generated_sow # Save progress immediately
+                    st.session_state.autofill_data = generated_sow
                 progress_bar.progress(90)
 
                 # 6. Timeline
@@ -272,7 +277,7 @@ with tabs[0]:
                 res = call_gemini_json(f"Create high-level timeline for '{sol_type}'. Include Phase, Task, Weeks.", time_schema, sys_instruct, api_key_input)
                 if res: 
                     generated_sow.update(res)
-                    st.session_state.autofill_data = generated_sow # Save progress immediately
+                    st.session_state.autofill_data = generated_sow
                 progress_bar.progress(100)
                 
                 st.session_state.autofill_done = True
@@ -489,8 +494,6 @@ with tabs[5]:
                 pdf.ln(5)
                 
                 pdf.chapter_title("2. SCOPE OF WORK")
-                # Removed detailed phase text blocks, relying on timeline logic if needed, 
-                # but for PDF simplistic export, let's just show Architecture and Timeline
                 
                 pdf.set_font('Arial', 'B', 10); pdf.cell(0, 6, "2.1 ARCHITECTURE", 0, 1)
                 pdf.set_font('Arial', '', 10)
